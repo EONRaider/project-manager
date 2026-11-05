@@ -61,3 +61,11 @@ Not yet done:
 1. Close an issue as not planned and record the Status the board shows (needs the decider's board
    access).
 2. The decider merges or closes the trial pull request; then delete the trial repository.
+
+Open follow-ups for the decider to rule on (suggested by the outgoing trial PM; not applied,
+since each changes the method and no review round is open):
+
+1. Write the handoff only after the turn's last tracker write, or re-read GitHub just before
+   committing it, so it is not stale by one event.
+2. Post each unit review's outcome as a comment on the pull request too, not only on the
+   sub-issue, so someone reading only the pull request sees it.
