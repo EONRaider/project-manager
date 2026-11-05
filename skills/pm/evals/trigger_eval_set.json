@@ -1,0 +1,10 @@
+[
+  {"query": "/project-manager:pm", "should_trigger": true},
+  {"query": "/project-manager:pm resume", "should_trigger": true},
+  {"query": "You are the PM for this project. Pick up from the handoff on the records branch.", "should_trigger": true},
+  {"query": "act as the project manager session for this repo and plan the next units", "should_trigger": true},
+  {"query": "fix the failing test in the parser", "should_trigger": false},
+  {"query": "what's the status of my pull request?", "should_trigger": false},
+  {"query": "set up this repo for the project-manager plugin", "should_trigger": false},
+  {"query": "write a project plan document for the marketing launch", "should_trigger": false}
+]

@@ -1,0 +1,8 @@
+[
+  {"query": "/project-manager:pm-setup", "should_trigger": true},
+  {"query": "set up this repo for the project-manager plugin", "should_trigger": true},
+  {"query": "create the rulings branch and the settings file for project-manager", "should_trigger": true},
+  {"query": "/project-manager:pm", "should_trigger": false},
+  {"query": "set up a Python virtual environment", "should_trigger": false},
+  {"query": "create a new GitHub project board for my side project", "should_trigger": false}
+]

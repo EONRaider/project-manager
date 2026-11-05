@@ -1,0 +1,376 @@
+"""Tests for the barred-folder guard."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import barred_paths as bp
+import pytest
+from conftest import ROOT, ProjectFactory, run_script
+
+SPECS = [
+    ":(top,exclude)secrets/",
+    ":(top,exclude,icase)*_private*",
+    ":(top,exclude)vendor/raw",
+]
+
+
+def env_with(project: ProjectFactory, specs: list[str] | None = None) -> dict[str, str]:
+    env = project({"hooks": {"barred_paths": True}, "barred_paths": specs or SPECS})
+    root = Path(env["CLAUDE_PROJECT_DIR"])
+    (root / "secrets").mkdir()
+    (root / "secrets" / "key.pem").write_text("x", encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "src" / "a.py").write_text("x", encoding="utf-8")
+    (root / "vendor" / "raw").mkdir(parents=True)
+    return env
+
+
+def call(
+    tool: str, tool_input: dict[str, object], env: dict[str, str], cwd: str = ""
+) -> object:
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "tool_input": tool_input,
+        "cwd": cwd or env["CLAUDE_PROJECT_DIR"],
+    }
+    return bp.decide(payload, env)
+
+
+def decision(out: object) -> str | None:
+    if out is None:
+        return None
+    assert isinstance(out, dict)
+    return str(out["hookSpecificOutput"]["permissionDecision"])
+
+
+def test_parse_spec() -> None:
+    barred = bp.parse_spec(":(top,exclude,icase)*_private*")
+    assert barred is not None
+    assert barred.icase
+    assert barred.core == "_private"
+    assert barred.fixed_prefix == ""
+    folder = bp.parse_spec(":(top,exclude)vendor/raw")
+    assert folder is not None
+    assert folder.fixed_prefix == "vendor/raw"
+
+
+@pytest.mark.parametrize(
+    ("rel", "barred"),
+    [
+        ("secrets", True),
+        ("secrets/key.pem", True),
+        ("secretsx/a", False),
+        ("src/My_PRIVATE_notes.txt", True),
+        ("src/public.txt", False),
+        ("vendor/raw/x/y", True),
+        ("vendor/rawish", False),
+    ],
+)
+def test_matching(rel: str, barred: bool) -> None:
+    patterns = [p for p in map(bp.parse_spec, SPECS) if p]
+    assert any(p.matches(rel) for p in patterns) is barred
+
+
+def test_read_of_barred_file_denied(project: ProjectFactory) -> None:
+    env = env_with(project)
+    out = call(
+        "Read", {"file_path": env["CLAUDE_PROJECT_DIR"] + "/secrets/key.pem"}, env
+    )
+    assert decision(out) == "deny"
+
+
+def test_read_outside_project_passes(project: ProjectFactory) -> None:
+    env = env_with(project)
+    assert call("Read", {"file_path": "/etc/hosts"}, env) is None
+
+
+def test_read_of_ordinary_file_passes(project: ProjectFactory) -> None:
+    env = env_with(project)
+    assert (
+        call("Read", {"file_path": env["CLAUDE_PROJECT_DIR"] + "/src/a.py"}, env)
+        is None
+    )
+
+
+def test_grep_from_root_is_denied_with_exclusions(project: ProjectFactory) -> None:
+    env = env_with(project)
+    out = call("Grep", {"pattern": "x"}, env)
+    assert decision(out) == "deny"
+    assert ":(top,exclude)secrets/" in json.dumps(out)
+
+
+def test_glob_inside_unrelated_folder_passes_when_no_anywhere_pattern(
+    project: ProjectFactory,
+) -> None:
+    env = env_with(project, [":(top,exclude)secrets/"])
+    out = call(
+        "Glob", {"pattern": "*.py", "path": env["CLAUDE_PROJECT_DIR"] + "/src"}, env
+    )
+    assert out is None
+
+
+def test_bash_cat_of_barred_path_denied(project: ProjectFactory) -> None:
+    env = env_with(project)
+    assert decision(call("Bash", {"command": "cat secrets/key.pem"}, env)) == "deny"
+    assert decision(call("Bash", {"command": "ls secrets"}, env)) == "deny"
+
+
+def test_bash_unpruned_search_denied(project: ProjectFactory) -> None:
+    env = env_with(project)
+    for command in (
+        "grep -rn TODO .",
+        "git grep TODO",
+        "find . -name '*.py'",
+        "rg TODO",
+    ):
+        assert decision(call("Bash", {"command": command}, env)) == "deny", command
+
+
+def test_bash_pruned_search_passes(project: ProjectFactory) -> None:
+    env = env_with(project)
+    specs = " ".join(f"'{s}'" for s in SPECS)
+    assert call("Bash", {"command": f"git grep TODO -- {specs}"}, env) is None
+
+
+def test_bash_ordinary_commands_pass(project: ProjectFactory) -> None:
+    env = env_with(project)
+    for command in (
+        "ls",
+        "ls src",
+        "grep TODO src/a.py",
+        "git status",
+        "echo TODO",
+        "cat src/a.py",
+    ):
+        assert call("Bash", {"command": command}, env) is None, command
+
+
+def test_bash_unparseable_command_asks(project: ProjectFactory) -> None:
+    env = env_with(project)
+    assert decision(call("Bash", {"command": "echo 'unclosed"}, env)) == "ask"
+
+
+def test_off_by_default(project: ProjectFactory) -> None:
+    env = project({"barred_paths": SPECS})
+    assert (
+        call("Read", {"file_path": env["CLAUDE_PROJECT_DIR"] + "/secrets/k"}, env)
+        is None
+    )
+
+
+def test_other_tools_pass(project: ProjectFactory) -> None:
+    env = env_with(project)
+    assert call("Write", {"file_path": "secrets/x"}, env) is None
+
+
+def test_main_end_to_end(project: ProjectFactory) -> None:
+    env = env_with(project)
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "cat secrets/key.pem"},
+        "cwd": env["CLAUDE_PROJECT_DIR"],
+    }
+    result = run_script("barred_paths.py", payload, env)
+    assert result.returncode == 0
+    assert (
+        json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+    )
+
+
+def test_main_fails_open(project: ProjectFactory) -> None:
+    result = run_script("barred_paths.py", "nope", env_with(project))
+    assert result.returncode == 1
+    assert result.stdout == ""
+
+
+def test_wildcard_under_a_barred_folder_denied(project: ProjectFactory) -> None:
+    env = env_with(project)
+    assert decision(call("Bash", {"command": "cat secrets/*"}, env)) == "deny"
+    assert call("Bash", {"command": "cat src/*.py"}, env) is None
+
+
+def test_hooks_json_matcher_covers_the_guarded_tools() -> None:
+    hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    commands = {
+        entry["matcher"]
+        for entry in hooks["hooks"]["PreToolUse"]
+        if "barred_paths.py" in entry["hooks"][0]["command"]
+    }
+    assert commands == {
+        "|".join(sorted(bp.GUARDED_TOOLS, key=["Read", "Grep", "Glob", "Bash"].index))
+    }
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -rn foo 2>/dev/null",
+        "grep -r -A 3 foo",
+        'grep -rn --include "*.py" foo',
+        "rg -t py foo",
+        'rg -g "*.py" TODO',
+        "fd -e py foo",
+        "git -C . grep foo",
+        'rg "api_secrets_key"',
+        'grep -rn "load secrets" .',
+        "cd src && grep -rn secrets ..",
+        "bash -c 'grep -rn foo .'",
+        "git show HEAD:secrets/key.pem",
+    ],
+)
+def test_ordinary_unpruned_searches_are_denied(
+    project: ProjectFactory, command: str
+) -> None:
+    env = env_with(project, [":(top,exclude)secrets/"])
+    assert decision(call("Bash", {"command": command}, env)) == "deny", command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -rn foo --exclude-dir=secrets .",
+        "rg foo -g '!secrets/**'",
+        "find . -not -path './secrets/*' -name '*.py'",
+        "find . -path ./secrets -prune -o -name '*.py' -print",
+        "git grep foo -- ':(exclude)secrets'",
+        "grep -rn foo src",
+        "rg foo src",
+    ],
+)
+def test_pruned_or_scoped_searches_pass(project: ProjectFactory, command: str) -> None:
+    env = env_with(project, [":(top,exclude)secrets/"])
+    assert call("Bash", {"command": command}, env) is None, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'git commit -m "secrets/ is now ignored"',
+        "git push origin secrets/rotate",
+        "git switch -c feature/private-beta",
+        "curl -s https://api.example.com/private/x",
+        "gh pr create --head feature/private-beta",
+    ],
+)
+def test_words_that_only_look_barred_pass(
+    project: ProjectFactory, command: str
+) -> None:
+    env = env_with(project)
+    assert call("Bash", {"command": command}, env) is None, command
+
+
+def test_grep_tool_below_or_beside_a_wildcard_pattern_passes(
+    project: ProjectFactory,
+) -> None:
+    env = env_with(project, [":(top,exclude,icase)*private*"])
+    root = env["CLAUDE_PROJECT_DIR"]
+    assert call("Grep", {"pattern": "x", "path": root + "/src"}, env) is None
+    assert call("Glob", {"pattern": "**/*.py"}, env) is None
+
+
+def test_grep_tool_from_above_a_barred_folder_denied(project: ProjectFactory) -> None:
+    env = env_with(project, [":(top,exclude)secrets/"])
+    assert decision(call("Grep", {"pattern": "TODO"}, env)) == "deny"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat < secrets/key.pem",
+        "wc -l < secrets/key.pem",
+        "bash -lc 'cat secrets/key.pem'",
+        "sh -xc 'cat secrets/key.pem'",
+        "sh -c -- 'cat secrets/key.pem'",
+        "git -C src log -p -- ../secrets",
+        "rg foo -g '!secrets_old/'",
+        "grep -r foo . --exclude-dir=src/secrets",
+    ],
+)
+def test_second_review_bypasses_are_denied(
+    project: ProjectFactory, command: str
+) -> None:
+    env = env_with(project, [":(top,exclude)secrets/"])
+    assert decision(call("Bash", {"command": command}, env)) == "deny", command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -n 'secrets/' src/a.py",
+        "rg -n 'secrets/' src",
+        "grep -rn 'secrets/' src --exclude-dir=secrets",
+        "echo secrets",
+        "kubectl get secrets",
+        "gh issue create --title secrets",
+        "git grep foo -- ':!secrets/'",
+        "git grep foo -- ':^secrets/'",
+        "git log --grep 'fix:secrets/rotation'",
+        "cat <<EOF\nsecrets\nEOF",
+    ],
+)
+def test_second_review_false_denials_pass(
+    project: ProjectFactory, command: str
+) -> None:
+    env = env_with(project, [":(top,exclude)secrets/"])
+    assert call("Bash", {"command": command}, env) is None, command
+
+
+def test_three_nested_shells_ask(project: ProjectFactory) -> None:
+    env = env_with(project, [":(top,exclude)secrets/"])
+    command = "bash -c \"bash -c 'bash -c ls'\""
+    assert decision(call("Bash", {"command": command}, env)) == "ask"
+
+
+def third_env(project: ProjectFactory) -> dict[str, str]:
+    env = env_with(
+        project, [":(top,exclude)secrets/", ":(top,exclude).env", "*_private*"]
+    )
+    root = Path(env["CLAUDE_PROJECT_DIR"])
+    (root / ".env").write_text("API_KEY=x", encoding="utf-8")
+    (root / "notes_private.txt").write_text("x", encoding="utf-8")
+    (root / "sub").mkdir()
+    (root / "sl").symlink_to(root / "secrets")
+    return env
+
+
+@pytest.mark.parametrize(
+    ("command", "cwd"),
+    [
+        ("grep API_KEY .env", ""),
+        ("cut -d= -f2 .env", ""),
+        ("grep foo notes_private.txt", ""),
+        ("openssl enc -in notes_private.txt", ""),
+        ("grep foo key.pem", "secrets"),
+        ("openssl rsa -in key.pem", "secrets"),
+        ("grep secrets/key.pem secrets/key.pem", ""),
+        ("git -C sub show HEAD:../secrets/key.pem", ""),
+        ("git show HEAD:./key.pem", "secrets"),
+        ("cat sl/key.pem", ""),
+    ],
+)
+def test_third_review_bypasses_are_denied(
+    project: ProjectFactory, command: str, cwd: str
+) -> None:
+    env = third_env(project)
+    where = str(Path(env["CLAUDE_PROJECT_DIR"]) / cwd) if cwd else ""
+    assert decision(call("Bash", {"command": command}, env, where)) == "deny", command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "tree -I 'secrets|node_modules|*_private*|.env'",
+        "grep -r --exclude-dir={secrets,.git} --exclude=.env --exclude='*_private*' foo .",
+        "find . -path '*/secrets' -prune -o -name .env -prune -o -name '*_private*' -prune -o -print",
+        "git ls-files ':!:secrets' ':!:.env' ':!*_private*'",
+        "gh issue create --title secrets/key.pem --body 'see .env'",
+        "kubectl get secrets",
+    ],
+)
+def test_third_review_false_denials_pass(project: ProjectFactory, command: str) -> None:
+    env = third_env(project)
+    assert call("Bash", {"command": command}, env) is None, command
