@@ -59,7 +59,9 @@ to re-check. Each entry is a CLAIM until its "Measured" line says otherwise.
 - Seen: 2026-11-05. A cloud session can be told to push only to its own assigned branch.
 - Rule: a handoff whose push is refused goes inline into the child's prompt, with its sha256.
 - Re-check: a direct push to the rulings branch from a cloud session.
-- Measured: not yet.
+- Measured: 2026-11-05, Claude Code 2.1.318: a cloud session pushed a new orphan `pm-records`
+  branch to an attached repository. The session's own assigned-branch rule did not cover that
+  repository, so the refused case is still unmeasured.
 
 ## GitHub tools in a cloud session
 
@@ -67,3 +69,10 @@ to re-check. Each entry is a CLAIM until its "Measured" line says otherwise.
   labels or issue dependencies, and `gh` was not signed in for writes.
 - Rule: such a session posts "Pending for the PM" comments for board, label and dependency
   changes.
+
+## The Stop hook's send-back is labelled an error
+
+- Seen: 2026-11-05, Claude Code 2.1.318, headless. When the plain-language Stop hook sends a
+  reply back (`decision: block`, exit 0), the app notifies "Stop hook error occurred".
+- Rule: nothing to change in the hook; tell the decider the label is the app's, not a failure.
+- Measured: yes, as above.
