@@ -20,7 +20,10 @@ to re-check. Each entry is a CLAIM until its "Measured" line says otherwise.
 - Rule: until measured, a cloud lane posts its reports as comments on its unit's sub-issue, and
   the PM reads them there.
 - Re-check: start a cloud lane, send it a message, and see whether its reply arrives.
-- Measured: not yet.
+- Measured: 2026-11-05, Claude Code 2.1.318: a cloud lane started by the PM with
+  `create_session` sent a report with the remote `send_message` tool, and it arrived in the PM's
+  cloud session as a new turn. Messaging between two cloud sessions that did not start each other
+  is still unmeasured.
 
 ## `ListAgents` lists local sessions
 

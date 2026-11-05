@@ -26,14 +26,30 @@ Done:
    check compared against `origin/main` before any fetch), 1 Minor (a `test "$(cat ...)"` check
    that ignores trailing newlines).
 
-Not yet done, in order:
+9. **Extra guard review** (the decider ordered one past the two-round cap). It found that the
+   last fix let grep, cut and openssl read a barred file named without a slash; fixed with tests
+   in the same session (188 tests).
+10. **Plan approval and records.** MEASURED on `EONRaider/pm-trial`: the plan's revision passed a
+    second fresh review (0 Blocker, 0 Major, 1 Minor, folded in); the decider approved it; the
+    approved text is frozen on `pm-records`; the plan issue carries the approval ruling as its
+    first comment; the register row links it; the unit's sub-issue was created and attached in
+    one call; issue type Task applied on a user-owned repository.
+11. **Lane exchange.** MEASURED: a cloud lane started with `create_session` implemented the unit,
+    pushed its branch, opened a pull request, and sent its finished-unit report with the remote
+    `send_message` tool; it reached the PM session as a new turn. So a cloud session started by
+    another can message its parent. It also posted the report on its sub-issue, and wrote to no
+    other issue.
+12. **Lane handoff.** MEASURED: the lane ran `/simplicity:shift-session` by name, started a child
+    titled "Lane hello file -> Part 2", and commented only on its own sub-issue.
+13. **Unit review.** A fresh reviewer found nothing to fix; the PM re-checked the commit's diff
+    and content.
+14. **PM handoff, in progress.** The PM committed `handoffs/part-1.md` and its state note to
+    `pm-records`, and started a fresh PM session with the commit, path and sha256. Its report
+    had not arrived when this session shifted.
 
-1. Fix the plan draft from its review, then the decider approves it.
-2. Commit the approved plan to `pm-records`, open the plan issue with the approval ruling as its
-   first comment, commit the register row, open the unit's sub-issue.
-3. Start one cloud lane from the lane start prompt; it adds the file, opens a pull request, and
-   reports by message (measures whether a cloud session can reply) and by sub-issue comment.
-4. The lane hands off through `/simplicity:shift-session`.
-5. The PM writes and commits its handoff; a fresh PM verifies the sha256 and resumes from GitHub.
-6. Close an issue as not planned and record the Status the board shows (needs the decider's board
+Not yet done:
+
+1. Read the fresh PM's report: hash match, position, and any disagreement with GitHub.
+2. Close an issue as not planned and record the Status the board shows (needs the decider's board
    access).
+3. The decider merges or closes the trial pull request; then delete the trial repository.
