@@ -32,13 +32,17 @@ Ask the user for the values the file needs, with a recommended default for each:
 - `project`: the GitHub Project for status, an existing one by number or a new one (step 3);
 - `notes_dir`: an absolute path outside the repository for working files, default
   `$HOME/pm-notes/<repo>` expanded to its full path (the settings check refuses a relative one);
-- `barred_paths`: folders or patterns no session may open or list, written as git pathspec
-  exclusions such as `:(top,exclude)secrets/` or `:(top,exclude,icase)*private*`; none by
-  default;
+- `barred_paths`: folders no session may open or list, written as git pathspec exclusions such
+  as `:(top,exclude)secrets/`; none by default. Prefer folders: a pattern with no fixed folder,
+  such as `:(top,exclude,icase)*private*`, still guards Bash searches, but the Grep and Glob
+  tools can't take exclusions, so the guard refuses them only when their root matches it;
 - which hooks to switch on (all off by default): `question_check` (refuses a question to the user
   that carries ids or file names), `plain_language_stop` (sends back a reply that does),
   `tracker_write_notice` (reminds a session to tell the PM after a GitHub write),
-  `barred_paths` (refuses opening or searching the barred paths);
+  `barred_paths` (refuses opening or searching the barred paths; a convenience for honest
+  sessions with limits listed in its script, not a sandbox: a command inside a script, alias or
+  function is not seen, and `git diff` or `git log -p` over a whole range can still show
+  barred content);
 - `shorthand.id_prefixes`: the project's own ticket prefixes, if any, for the plain-language
   checks.
 

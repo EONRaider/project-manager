@@ -118,7 +118,8 @@ review your own writing.
 ## 7. Budget and handoff
 
 Usage limits and the context policy are in `${CLAUDE_SKILL_DIR}/references/usage.md`. At every
-suggestion from simplicity's context hook, commit the state note. When the decider says to shift,
+suggestion from simplicity's context hook, once the decider has answered its question, commit
+the state note. When the decider says to shift,
 write the handoff before anything else is committed: `references/usage.md`, "Handing off".
 
 ## Never

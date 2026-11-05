@@ -24,8 +24,9 @@ needs `gh project ...` with the `project` scope (`gh auth refresh -s project`).
   Plan text: plans/<date>-<slug>.md @ <commit SHA on the rulings branch>
   ```
 
-Every `gh` command below runs against `<tracker_repo>` (add `-R <tracker_repo>` when the
-current folder is another repository).
+Every `gh issue` command below runs against `<tracker_repo>` (add `-R <tracker_repo>` when the
+current folder is another repository). The `gh api` paths already name the repository, and
+`gh project` commands take `--owner`.
 
 ## Stages
 

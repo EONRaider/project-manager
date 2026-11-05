@@ -275,3 +275,51 @@ def test_grep_tool_below_or_beside_a_wildcard_pattern_passes(
 def test_grep_tool_from_above_a_barred_folder_denied(project: ProjectFactory) -> None:
     env = env_with(project, [":(top,exclude)secrets/"])
     assert decision(call("Grep", {"pattern": "TODO"}, env)) == "deny"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat < secrets/key.pem",
+        "wc -l < secrets/key.pem",
+        "bash -lc 'cat secrets/key.pem'",
+        "sh -xc 'cat secrets/key.pem'",
+        "sh -c -- 'cat secrets/key.pem'",
+        "git -C src log -p -- ../secrets",
+        "rg foo -g '!secrets_old/'",
+        "grep -r foo . --exclude-dir=src/secrets",
+    ],
+)
+def test_second_review_bypasses_are_denied(
+    project: ProjectFactory, command: str
+) -> None:
+    env = env_with(project, [":(top,exclude)secrets/"])
+    assert decision(call("Bash", {"command": command}, env)) == "deny", command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -n 'secrets/' src/a.py",
+        "rg -n 'secrets/' src",
+        "grep -rn 'secrets/' src --exclude-dir=secrets",
+        "echo secrets",
+        "kubectl get secrets",
+        "gh issue create --title secrets",
+        "git grep foo -- ':!secrets/'",
+        "git grep foo -- ':^secrets/'",
+        "git log --grep 'fix:secrets/rotation'",
+        "cat <<EOF\nsecrets\nEOF",
+    ],
+)
+def test_second_review_false_denials_pass(
+    project: ProjectFactory, command: str
+) -> None:
+    env = env_with(project, [":(top,exclude)secrets/"])
+    assert call("Bash", {"command": command}, env) is None, command
+
+
+def test_three_nested_shells_ask(project: ProjectFactory) -> None:
+    env = env_with(project, [":(top,exclude)secrets/"])
+    command = "bash -c \"bash -c 'bash -c ls'\""
+    assert decision(call("Bash", {"command": command}, env)) == "ask"

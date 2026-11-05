@@ -172,6 +172,31 @@ _GIT_GLOBAL_VALUE_FLAGS = frozenset(
     {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
 )
 _GIT_LISTERS = frozenset({"grep", "ls-files", "ls-tree"})
+# git subcommand flags whose value is text, never a path.
+_GIT_TEXT_FLAGS = frozenset(
+    {
+        "--grep",
+        "--author",
+        "--committer",
+        "-m",
+        "--message",
+        "-S",
+        "-G",
+        "--format",
+        "--pretty",
+    }
+)
+# Commands whose bare-word arguments (no `/`) name files they read.
+_FILE_READERS = frozenset(
+    {
+        "cat", "less", "more", "head", "tail", "wc", "nl", "od", "xxd", "hexdump", "strings",
+        "file", "stat", "cp", "mv", "rsync", "scp", "tar", "zip", "unzip", "jq", "yq", "sed",
+        "awk", "sort", "uniq", "diff", "cmp", "base64", "md5sum", "sha1sum", "sha256sum",
+        "source", ".", "vi", "vim", "nano", "bat", "du", "ls", "python", "python3", "node",
+    }
+)  # fmt: skip
+# Commands that only print their arguments.
+_PRINTERS = frozenset({"echo", "printf"})
 _GIT_FILE_READERS = frozenset(
     {"show", "cat-file", "blame", "diff", "log", "archive", "grep"}
 )
@@ -255,12 +280,36 @@ class Barred:
             exclusions: The values the command passes in exclusion form.
 
         Returns:
-            ``True`` when the whole pathspec is passed, or an exclusion value contains the
-            pattern's fixed text.
+            ``True`` when the whole pathspec is passed, or an exclusion value, with its
+            ``!``, ``./``, ``**/`` and trailing ``/**`` or ``/`` removed, is the pattern itself.
         """
+        wanted = {self.bare, self.core}
         return any(
-            value == self.spec or self.core in self._fold(value) for value in exclusions
+            value == self.spec or self._fold(normalize_exclusion(value)) in wanted
+            for value in exclusions
         )
+
+
+def normalize_exclusion(value: str) -> str:
+    """An exclusion value reduced to the path it names: ``'!./secrets/**'`` gives ``secrets``.
+
+    Args:
+        value: One exclusion value as the command passed it.
+
+    Returns:
+        The bare path or pattern.
+    """
+    text = value.strip()
+    if text.startswith(":(") and ")" in text:
+        text = text.split(")", 1)[1]
+    elif text.startswith((":!", ":^")):
+        text = text[2:]
+    text = text.removeprefix("!").removeprefix("./").removeprefix("/")
+    while text.startswith("**/"):
+        text = text[3:]
+    for suffix in ("/**", "/*", "/"):
+        text = text.removesuffix(suffix)
+    return text
 
 
 def parse_spec(spec: str) -> Barred | None:
@@ -314,29 +363,39 @@ def _glob_head(token: str) -> str:
     return head[: head.rfind("/")] if "/" in head else ""
 
 
-def strip_redirections(segment: list[str]) -> list[str]:
-    """A segment without its redirections: ``2>/dev/null`` and ``< file`` go, with their targets.
+def strip_redirections(segment: list[str]) -> tuple[list[str], list[str]]:
+    """Split a segment's redirections from its command and arguments.
+
+    ``2>/dev/null`` and ``> out`` go, with their targets. An input redirection's target
+    (``< file``) is returned on its own, since it is a file the command reads. A here-document
+    or here-string (``<<``, ``<<<``) reads no file.
 
     Args:
         segment: One simple command's tokens.
 
     Returns:
-        The tokens that are the command and its arguments.
+        The command and its arguments, and the files read through input redirection.
     """
     kept: list[str] = []
+    inputs: list[str] = []
     skip_next = False
+    read_next = False
     for index, token in enumerate(segment):
         if skip_next:
             skip_next = False
+            if read_next:
+                inputs.append(token)
+                read_next = False
             continue
         if token and set(token) <= set("<>&"):
             skip_next = True
+            read_next = token in {"<", "<>", "<&"}
             continue
         following = segment[index + 1] if index + 1 < len(segment) else ""
         if token.isdigit() and following and set(following) <= set("<>&"):
             continue
         kept.append(token)
-    return kept
+    return kept, inputs
 
 
 def positionals(args: list[str], value_flags: frozenset[str]) -> list[str]:
@@ -490,12 +549,15 @@ class Guard:
             return []
         return [p for p in self.patterns if p.reachable_from(rel, anywhere)]
 
-    def token_hit(self, token: str, cwd: str) -> tuple[str, Barred] | None:
+    def token_hit(
+        self, token: str, cwd: str, bare_words: bool = True
+    ) -> tuple[str, Barred] | None:
         """The existing barred path a command argument names, with its pattern, if any.
 
         Only arguments naming something that exists count, so a branch name, a URL or a commit
         message that merely contains a barred word passes. A wildcard argument counts when its
-        fixed leading folder is barred.
+        fixed leading folder is barred. With ``bare_words`` false, an argument without a ``/``
+        never counts: ``kubectl get secrets`` names no file.
         """
         if token.startswith("-") and "=" in token:
             token = token.split("=", 1)[1]
@@ -504,7 +566,7 @@ class Guard:
         if any(c.isspace() for c in token):
             return None
         candidate = _glob_head(token) if _has_wildcard(token) else token
-        if not candidate:
+        if not candidate or (not bare_words and "/" not in candidate):
             return None
         hit = self.barred(candidate, cwd)
         if hit is not None and os.path.lexists(os.path.join(cwd, candidate)):
@@ -513,7 +575,7 @@ class Guard:
 
     def revision_path_hit(self, token: str) -> tuple[str, Barred] | None:
         """A ``<rev>:<path>`` argument naming a barred path, as ``git show HEAD:secrets/key``."""
-        if ":" not in token or token.startswith(":("):
+        if ":" not in token or token.startswith((":(", ":!", ":^", "-")):
             return None
         path = token.split(":", 1)[1].removeprefix("./")
         if not path:
@@ -558,7 +620,10 @@ class Guard:
             return hook_io.permission("ask", reason)
         cwd = self.cwd
         for raw in segments:
-            segment = strip_redirections(raw)
+            segment, inputs = strip_redirections(raw)
+            for target in inputs:
+                if found := self.token_hit(target, cwd):
+                    return _refused(found)
             start = hook_io.command_start(segment)
             if start >= len(segment):
                 continue
@@ -571,11 +636,11 @@ class Guard:
                     else self.project_dir
                 )
                 continue
-            if name in _SHELLS and "-c" in args and depth < 2:
-                index = args.index("-c")
-                if index + 1 < len(args) and (
-                    inner := self.bash_in(args[index + 1], cwd, depth)
-                ):
+            if name in _SHELLS and (script := _shell_script(args)) is not None:
+                if depth >= 2:
+                    reason = "The barred-folder guard stops at two nested shells. Check this."
+                    return hook_io.permission("ask", reason)
+                if inner := self.bash_in(script, cwd, depth):
                     return inner
                 continue
             if out := self._arguments(name, args, cwd):
@@ -606,32 +671,72 @@ class Guard:
         return inner.bash(command, depth + 1)
 
     def _arguments(self, name: str, args: list[str], cwd: str) -> dict[str, Any] | None:
-        if name == "git":
-            words = positionals(args, _GIT_GLOBAL_VALUE_FLAGS)
-            if not words or words[0] not in _GIT_FILE_READERS:
-                return None
-            for token in words[1:]:
-                found = self.revision_path_hit(token) or self.token_hit(token, cwd)
-                if found:
-                    return hook_io.permission(
-                        "deny",
-                        f"Command refused: {found[0]} is barred by {found[1].spec}.",
-                    )
+        if name in _PRINTERS:
             return None
-        excluded = set(exclusion_values(name, args))
+        if name == "git":
+            return self._git_arguments(args, cwd)
+        skip = set(exclusion_values(name, args)) | set(search_patterns(name, args))
+        bare_words = name in _FILE_READERS
         for token in args:
             value = (
                 token.split("=", 1)[1]
                 if token.startswith("-") and "=" in token
                 else token
             )
-            if value in excluded:
+            if value in skip:
                 continue
-            if found := self.token_hit(token, cwd):
-                return hook_io.permission(
-                    "deny", f"Command refused: {found[0]} is barred by {found[1].spec}."
-                )
+            if found := self.token_hit(token, cwd, bare_words):
+                return _refused(found)
         return None
+
+    def _git_arguments(self, args: list[str], cwd: str) -> dict[str, Any] | None:
+        rest = list(args)
+        while rest and rest[0].startswith("-"):
+            flag = rest.pop(0)
+            if flag in _GIT_GLOBAL_VALUE_FLAGS and rest:
+                value = rest.pop(0)
+                if flag == "-C":
+                    cwd = os.path.normpath(os.path.join(cwd, value))
+        if not rest or rest[0] not in _GIT_FILE_READERS:
+            return None
+        for token in positionals(rest[1:], _GIT_TEXT_FLAGS):
+            if found := self.revision_path_hit(token) or self.token_hit(token, cwd):
+                return _refused(found)
+        return None
+
+
+def _refused(found: tuple[str, Barred]) -> dict[str, Any]:
+    return hook_io.permission(
+        "deny", f"Command refused: {found[0]} is barred by {found[1].spec}."
+    )
+
+
+def _shell_script(args: list[str]) -> str | None:
+    """The script a shell runs with ``-c`` (also inside a cluster such as ``-lc``), if any."""
+    for index, arg in enumerate(args):
+        if arg.startswith("-") and not arg.startswith("--") and "c" in arg[1:]:
+            rest = [a for a in args[index + 1 :] if a != "--"]
+            return rest[0] if rest else None
+    return None
+
+
+def search_patterns(name: str, args: list[str]) -> list[str]:
+    """The search patterns a grep-like command is given: its first word, or its ``-e`` values.
+
+    Args:
+        name: The command's name.
+        args: Its arguments.
+
+    Returns:
+        The pattern texts, which are never paths.
+    """
+    if name not in {"grep", "egrep", "fgrep", "rg", "ag"}:
+        return []
+    explicit = [args[i + 1] for i, a in enumerate(args[:-1]) if a in {"-e", "--regexp"}]
+    explicit += [a.split("=", 1)[1] for a in args if a.startswith("--regexp=")]
+    if explicit or any(a in {"-f", "--file"} for a in args):
+        return explicit
+    return positionals(args, _VALUE_FLAGS[name])[:1]
 
 
 def decide(

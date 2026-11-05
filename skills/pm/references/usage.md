@@ -9,7 +9,9 @@ context use reaches its threshold (60% of the model's window by default, then ag
 points; the `SIMPLICITY_SHIFT_THRESHOLD` environment variable changes it). This method adds no
 limits of its own, so a session never answers to two context policies.
 
-- **At every suggestion**, the PM commits its state note to the rulings branch.
+- **At every suggestion**, once the decider has answered simplicity's question, the PM commits
+  its state note to the rulings branch as its own work: on "Shift now" as part of the handoff
+  below, on "Not now" before carrying on. Nothing is committed while the question is open.
 - **The shift itself** starts only when the decider answers "Shift now" to simplicity's own
   question, or asks for the shift by name. Then follow "Handing off" below.
 - A lane does the same: the decider answers the question in the lane's session. A lane whose
@@ -43,12 +45,13 @@ A shift reaches the PM one of two ways, and the handoff file is written first ei
   the decider once. On "Shift now", stop inside that running skill before its step 1, do steps
   1 and 2 below, then let the skill carry on from its step 1. Never start the skill a second
   time.
-- **Manual.** The decider asks for the shift by name. Do steps 1 and 2 below first, then run
-  `/simplicity:shift-session`.
+- **Manual.** The decider asks for the shift by name, which starts the skill. Stop before its
+  step 1 as above, do steps 1 and 2 below, then let it carry on. Never start it a second time.
 
 The steps:
 
-1. Write `handoffs/part-<N>.md` on the rulings branch from the skill's `templates/handoff.md`:
+1. Write `handoffs/part-<N>.md` on the rulings branch from the pm skill's own
+   `templates/handoff.md` (simplicity has no template for it):
    every lane with its title, unit, branch, SHA and whether that is on `origin`; reviews in
    flight and their round; the decider's open questions word for word; every unanswered message copied in; the
    next step; the plan issues. It is committed, so it holds nothing secret.
