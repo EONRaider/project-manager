@@ -1,0 +1,50 @@
+{
+  "description": "project-manager hooks. Each does nothing until the project's .claude/project-manager.json switches it on.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/plain_language.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/plain_language.py\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Grep|Glob|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/barred_paths.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(mcp__.+__(issue_write|add_issue_comment|update_issue_comment|sub_issue_write|create_pull_request|update_pull_request|pull_request_review_write|add_comment_to_pending_review|add_reply_to_pull_request_comment|merge_pull_request)|Bash)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/tracker_write_notice.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

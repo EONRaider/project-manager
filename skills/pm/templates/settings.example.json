@@ -1,0 +1,22 @@
+{
+  "$schema_version": 1,
+  "tracker_repo": "owner/name",
+  "project": { "owner": "owner", "number": 1 },
+  "decider": "Sam",
+  "pm_title_prefix": "PM ",
+  "notes_dir": "/absolute/path/to/pm-notes/name",
+  "rulings_branch": "pm-records",
+  "rulings_path": "rulings.md",
+  "barred_paths": [":(top,exclude)secrets/"],
+  "review_model": "opus",
+  "hooks": {
+    "plain_language_stop": false,
+    "question_check": false,
+    "tracker_write_notice": false,
+    "barred_paths": false
+  },
+  "shorthand": {
+    "id_prefixes": [],
+    "top_level_dirs": ["src", "tests", "docs", "scripts", ".github", ".claude"]
+  }
+}

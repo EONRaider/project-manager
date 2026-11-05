@@ -1,0 +1,14 @@
+{
+  "name": "project-manager",
+  "version": "0.1.0",
+  "description": "A working method for running a project through one coordinating Claude Code session (the PM) and several worker sessions (lanes), with a human deciding and git and GitHub holding the record. /project-manager:pm carries the method: the PM plans, reviews, records and relays, and never implements; one independent review plus one review of the changes per unit; evidence labels; plain language to the decider; usage limits and handoffs. /project-manager:pm-setup prepares a project: the settings file, the GitHub Project's Deferred status, and the rulings branch. Four opt-in hooks: a plain-language check on replies and questions, a reminder after GitHub writes, and a barred-folder guard. Depends on simplicity for handoffs.",
+  "author": {
+    "name": "EONRaider",
+    "url": "https://github.com/EONRaider"
+  },
+  "homepage": "https://github.com/EONRaider/project-manager",
+  "repository": "https://github.com/EONRaider/project-manager",
+  "license": "MIT",
+  "keywords": ["project-management", "orchestration", "sessions", "github-issues", "github-projects", "review", "handoff", "hooks", "plain-language"],
+  "dependencies": ["simplicity"]
+}
