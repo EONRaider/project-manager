@@ -54,8 +54,10 @@ The steps:
    `templates/handoff.md` (simplicity has no template for it):
    every lane with its title, unit, branch, SHA and whether that is on `origin`; reviews in
    flight and their round; the decider's open questions word for word; every unanswered message copied in; the
-   next step; the plan issues. It is committed, so it holds nothing secret.
-2. Commit and push it. Record the commit SHA and the file's hash:
+   next step; the plan issues. It is committed, so it holds nothing secret. Refresh
+   `state/state-note.md` from the same facts in the same commit; never leave it the blank
+   template.
+2. Commit and push both. Record the commit SHA and the file's hash:
    `git show <commit>:handoffs/part-<N>.md | sha256sum`.
 3. In the skill's own steps: put these three values into the child's prompt, in its Next step,
    word for word: "Read handoff `<path>` at commit `<sha>` on `<rulings_branch>`; its sha256

@@ -43,13 +43,21 @@ Done:
     titled "Lane hello file -> Part 2", and commented only on its own sub-issue.
 13. **Unit review.** A fresh reviewer found nothing to fix; the PM re-checked the commit's diff
     and content.
-14. **PM handoff, in progress.** The PM committed `handoffs/part-1.md` and its state note to
-    `pm-records`, and started a fresh PM session with the commit, path and sha256. Its report
-    had not arrived when this session shifted.
+14. **PM handoff.** MEASURED: the PM committed `handoffs/part-1.md` to `pm-records` and started
+    a fresh PM session with the commit, path and sha256. The fresh PM matched the hash, found the
+    handoff commit at the branch tip, checked ruling R-1 in both places, matched the lane's branch
+    head to the pull request's, and reported to its parent by message. It found three
+    disagreements and let GitHub win each:
+    - The handoff said the unit review was still waiting; a comment posted 43 seconds after the
+      handoff commit closed it with no findings. The "GitHub wins" check caught the stale line,
+      as designed.
+    - The review lived only as a comment on the sub-issue, so the pull request itself shows no
+      review. Expected: the PM's reviewer never approves a pull request.
+    - The state note was still the blank template. The handoff steps never said to refresh it;
+      fixed in `skills/pm/references/usage.md`, "Handing off", step 1.
 
 Not yet done:
 
-1. Read the fresh PM's report: hash match, position, and any disagreement with GitHub.
-2. Close an issue as not planned and record the Status the board shows (needs the decider's board
+1. Close an issue as not planned and record the Status the board shows (needs the decider's board
    access).
-3. The decider merges or closes the trial pull request; then delete the trial repository.
+2. The decider merges or closes the trial pull request; then delete the trial repository.
