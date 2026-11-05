@@ -58,7 +58,8 @@ LINK_DOMAIN_SUFFIXES = (
     "com", "org", "net", "io", "ai", "dev", "app", "co", "gg", "me", "edu", "gov", "uk", "de",
 )  # fmt: skip
 
-PATH_MARKER_CHARS = frozenset("_-.")
+# A word list such as `client-side/server-side/edge` is prose; a path holds a `_` or `.`.
+PATH_MARKER_CHARS = frozenset("_.")
 
 _LINK_CHARS = r"[^\s`'\"()<>\[\]]"
 URL_PATTERN = re.compile(
@@ -78,6 +79,7 @@ GENERIC_PATTERNS = (
     # digits reads as a colour, such as `#112233`, and passes.
     re.compile(r"(?<![\w&])#(?!\d{6}(?!\w))\d{2,}(?!\w)"),
     re.compile(r"(?<![\w-])PR ?#?\d+(?!\w)"),
+    re.compile(r"(?<![\w-])[Ii]ssue ?#?\d+(?!\w)"),
     re.compile(r"(?<![\w-])comment ?#?\d+(?!\w)", re.IGNORECASE),
     # A file name. A capitalised name ending in `.js`, such as Node.js, is a product, not a file.
     re.compile(
@@ -240,7 +242,10 @@ def sources_start(lines: list[str]) -> int:
             for line in lines[headings[-1] + 1 :]
             if not _SOURCES_HEADING.match(line)
         )
-        if not any(match and len(match.group(1)) <= level for match in later):
+        prose_before = any(line.strip() for line in lines[: headings[-1]])
+        if prose_before and not any(
+            match and len(match.group(1)) <= level for match in later
+        ):
             return headings[-1]
     start = len(lines)
     for i in range(len(lines) - 1, -1, -1):

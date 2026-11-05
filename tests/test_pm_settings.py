@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pm_settings
 import pytest
 from conftest import ProjectFactory
@@ -98,3 +100,19 @@ def test_cli_verdicts(
     assert pm_settings.main(["--project-dir", root, "--path"]) == 0
     assert capsys.readouterr().out.strip().endswith("project-manager.json")
     assert pm_settings.main(["--bogus"]) == 2
+
+
+def test_settings_found_from_a_subfolder(project: ProjectFactory) -> None:
+    env = project({"hooks": {"question_check": True}})
+    root = env["CLAUDE_PROJECT_DIR"]
+    (Path(root) / ".git").mkdir()
+    sub = Path(root) / "src" / "deep"
+    sub.mkdir(parents=True)
+    settings = pm_settings.load({"CLAUDE_PROJECT_DIR": str(sub)})
+    assert settings is not None
+    assert settings.project_root == root
+
+
+def test_relative_notes_dir_is_an_error(project: ProjectFactory) -> None:
+    with pytest.raises(pm_settings.SettingsError):
+        pm_settings.load(project({"notes_dir": "notes"}))

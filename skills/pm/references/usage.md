@@ -31,23 +31,34 @@ The 5-hour and weekly windows. Use the stricter row that matches.
   reclaimed, and background work isn't restored. Push committed work only; never commit
   half-done work just to have something to push.
 - **Where a reading comes from** (a local usage tool, a cloud session field, the decider's
-  screenshot) depends on the app version: `${CLAUDE_PLUGIN_ROOT}/docs/desktop-app-notes.md`.
+  screenshot) depends on the app version: see the plugin's dated notes file,
+  `docs/desktop-app-notes.md` under the plugin root that the skill names.
   A reading that warns can raise a row; only a percentage can lower one.
 
 ## Handing off
 
-When the decider has said to shift, before anything else is committed:
+A shift reaches the PM one of two ways, and the handoff file is written first either way:
 
-1. Write `handoffs/part-<N>.md` on the rulings branch from `templates/handoff.md`: every lane
-   with its title, unit, branch, SHA and whether that is on `origin`; reviews in flight and their
-   round; the decider's open questions word for word; every unanswered message copied in; the
+- **Automatic.** simplicity's context hook starts `/simplicity:shift-session --auto`, which asks
+  the decider once. On "Shift now", stop inside that running skill before its step 1, do steps
+  1 and 2 below, then let the skill carry on from its step 1. Never start the skill a second
+  time.
+- **Manual.** The decider asks for the shift by name. Do steps 1 and 2 below first, then run
+  `/simplicity:shift-session`.
+
+The steps:
+
+1. Write `handoffs/part-<N>.md` on the rulings branch from the skill's `templates/handoff.md`:
+   every lane with its title, unit, branch, SHA and whether that is on `origin`; reviews in
+   flight and their round; the decider's open questions word for word; every unanswered message copied in; the
    next step; the plan issues. It is committed, so it holds nothing secret.
 2. Commit and push it. Record the commit SHA and the file's hash:
    `git show <commit>:handoffs/part-<N>.md | sha256sum`.
-3. Run `/simplicity:shift-session`. Its handoff prompt is written by that skill; put these three
-   values into the prompt's Next step, word for word: "Read handoff `<path>` at commit `<sha>` on
-   `<rulings_branch>`; its sha256 must be `<hash>`." Its tracker step comments only on the plan
-   issues you own.
+3. In the skill's own steps: put these three values into the child's prompt, in its Next step,
+   word for word: "Read handoff `<path>` at commit `<sha>` on `<rulings_branch>`; its sha256
+   must be `<hash>`." Its tracker step comments only on the plan issues you own. Its branch scan
+   skips the records worktree: that branch is already pushed, and as an orphan branch it has no
+   merge base with the default branch, so the scan's diff would fail there.
 4. **If the push in step 2 is refused**, put the handoff's full text into the prompt's Context
    section instead, with its sha256, and tell the child to commit it once it can.
 

@@ -1,7 +1,8 @@
 # Review: one review, one review of the changes
 
-Every plan and every unit gets exactly this. The author never reviews its own work, and the PM
-never reviews its own writing.
+Every plan and every unit gets at most two reviewer rounds: one review, and one review of the
+changes when round one found a Blocker or Major. The author never reviews its own work, and the
+PM never reviews its own writing.
 
 ## Round one
 
@@ -31,6 +32,9 @@ never reviews its own writing.
    ruling in the decider's own words, and the Minors. Have the advisor read it first.
 
 ## Round two: the changes only
+
+A round one with no Blocker or Major closes the review: its Minors go into the revision brief
+and need no second round.
 
 1. When the author reports the revision ready, freeze it the same way.
 2. Start one fresh agent that took no part in round one. It reads only the changes (the diff from

@@ -185,3 +185,17 @@ def test_product_names_ending_in_js_pass(name: str) -> None:
 
 def test_lowercase_js_file_still_matches() -> None:
     assert scan("see index.js") == ["index.js"]
+
+
+def test_issue_word_with_number_matches() -> None:
+    assert scan("fixed in Issue 12") == ["Issue 12"]
+
+
+@pytest.mark.parametrize("text", ["client-side/server-side/edge", "e-mail/phone/post"])
+def test_hyphenated_word_lists_pass(text: str) -> None:
+    assert scan(text) == []
+
+
+def test_sources_heading_at_the_top_exempts_nothing() -> None:
+    message = "## Sources\nMerged #42 today.\n"
+    assert scan(plain_language.reply_text(message)) == ["#42"]

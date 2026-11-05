@@ -4,22 +4,28 @@ A project lists paths no session may open or list, as git pathspec exclusions
 (``":(top,exclude)secrets/"``, ``":(top,exclude,icase)*_private*"``). This guard refuses:
 
 - ``Read`` of a barred file;
-- ``Grep`` or ``Glob`` whose search root is barred, or could reach a barred path: the tools take
-  no exclusions, so a search that starts at or above a barred folder is refused, with the
-  exclusions to use in a ``git grep`` instead;
-- a ``Bash`` command with any argument that names a barred path, or a wildcard argument whose
-  fixed leading folder is barred;
-- a ``Bash`` search (``grep -r``, ``rg``, ``ag``, ``fd``, ``find``, ``tree``, ``git grep``,
-  ``git ls-files``, ``ls -R``) that starts at or above a barred folder and names no exclusion
-  for it.
+- ``Grep`` or ``Glob`` whose search root is barred or sits at or above a barred folder. The tools
+  take no exclusions, so the reason names the ``git grep`` exclusions to use instead. A pattern
+  with no fixed folder (``*_private*``) refuses them only when their root itself matches;
+- a ``Bash`` argument that names an existing barred path, or a wildcard argument whose fixed
+  leading folder is barred, and ``git show <rev>:<path>`` style arguments naming a barred path;
+- a ``Bash`` search (``grep -r``, ``rg``, ``ag``, ``fd``, ``find``, ``tree``, ``ls -R``,
+  ``git grep``, ``git ls-files``, ``git ls-tree``) that starts at or above a barred folder, or
+  anywhere for a pattern with no fixed folder, and names no exclusion for it.
+
+An exclusion counts only in an exclusion form: a ``:(exclude)``, ``:!`` or ``:^`` pathspec,
+``--exclude``/``--exclude-dir``, ``--ignore``, ``-g '!...'``, fd's ``-E``, tree's ``-I``, or a
+``find`` test negated with ``-not``/``!`` or followed by ``-prune``.
 
 Matching follows git pathspec rules for these patterns: the pattern is matched against the path
 from the project root, ``*`` also crosses ``/``, and a pattern with no wildcard also covers
 everything under it. ``icase`` makes the match case-insensitive.
 
-Every other command passes. A command the guard cannot parse gets ``ask``, so the person
-decides. Any other internal error fails open with one stderr line starting ``barred_paths:``:
-this is a convenience guard that keeps honest sessions honest, not a security boundary.
+Known limits, by design: commands inside scripts, aliases or functions are not seen, and
+``git diff`` or ``git log -p`` over a whole range can still show barred content. This is a
+convenience guard that keeps honest sessions honest, not a security boundary. A command it
+cannot parse gets ``ask``. Any other internal error fails open with one stderr line starting
+``barred_paths:``.
 """
 
 from __future__ import annotations
@@ -41,11 +47,137 @@ GUARDED_TOOLS = frozenset({"Read", "Grep", "Glob", "Bash"})
 
 _WILDCARDS = frozenset("*?[")
 
-_GREP_TOOLS = frozenset({"grep", "egrep", "fgrep"})
+_SHELLS = frozenset({"bash", "sh", "zsh", "dash"})
 
-_PATTERN_FIRST_TOOLS = frozenset({"rg", "ag", "fd"})
+# Flags that take the next token as their value, per search tool. A value is never a root.
+_VALUE_FLAGS = {
+    "grep": frozenset(
+        [
+            "-A",
+            "-B",
+            "-C",
+            "-m",
+            "-e",
+            "-f",
+            "-d",
+            "-D",
+            "--regexp",
+            "--file",
+            "--max-count",
+            "--context",
+            "--after-context",
+            "--before-context",
+            "--include",
+            "--exclude",
+            "--exclude-dir",
+            "--exclude-from",
+            "--label",
+        ]
+    ),
+    "rg": frozenset(
+        [
+            "-t",
+            "-T",
+            "-g",
+            "-e",
+            "-f",
+            "-A",
+            "-B",
+            "-C",
+            "-m",
+            "-M",
+            "-j",
+            "-d",
+            "-E",
+            "-r",
+            "--type",
+            "--type-not",
+            "--glob",
+            "--iglob",
+            "--regexp",
+            "--file",
+            "--max-count",
+            "--max-columns",
+            "--threads",
+            "--context",
+            "--after-context",
+            "--before-context",
+            "--max-depth",
+            "--type-add",
+            "--sort",
+            "--sortr",
+            "--encoding",
+            "--replace",
+            "--pre",
+            "--ignore-file",
+        ]
+    ),
+    "ag": frozenset(
+        [
+            "-G",
+            "-g",
+            "-A",
+            "-B",
+            "-C",
+            "-m",
+            "--ignore",
+            "--ignore-dir",
+            "--depth",
+            "--file-search-regex",
+            "--context",
+        ]
+    ),
+    "fd": frozenset(
+        [
+            "-e",
+            "-t",
+            "-E",
+            "-d",
+            "-x",
+            "-X",
+            "-S",
+            "-o",
+            "-c",
+            "-j",
+            "--extension",
+            "--type",
+            "--exclude",
+            "--max-depth",
+            "--min-depth",
+            "--exact-depth",
+            "--exec",
+            "--exec-batch",
+            "--size",
+            "--changed-within",
+            "--changed-before",
+            "--owner",
+            "--search-path",
+            "--base-directory",
+            "--color",
+            "--threads",
+            "--max-results",
+        ]
+    ),
+    "tree": frozenset(["-I", "-P", "-L", "-o", "--filelimit", "--charset", "--sort"]),
+}
+_VALUE_FLAGS["egrep"] = _VALUE_FLAGS["fgrep"] = _VALUE_FLAGS["grep"]
 
+# Flags whose value is an exclusion, per tool.
+_EXCLUDE_FLAGS = frozenset(
+    ["--exclude", "--exclude-dir", "--ignore", "--ignore-dir", "-E", "-I"]
+)
+_GLOB_FLAGS = frozenset({"-g", "--glob", "--iglob"})
+
+_GIT_GLOBAL_VALUE_FLAGS = frozenset(
+    {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
+)
 _GIT_LISTERS = frozenset({"grep", "ls-files", "ls-tree"})
+_GIT_FILE_READERS = frozenset(
+    {"show", "cat-file", "blame", "diff", "log", "archive", "grep"}
+)
+_FIND_NAME_TESTS = frozenset(
+    {"-path", "-ipath", "-name", "-iname", "-wholename", "-regex"}
+)
 
 
 def _has_wildcard(text: str) -> bool:
@@ -55,7 +187,7 @@ def _has_wildcard(text: str) -> bool:
 class Barred:
     """One barred pattern, with the parts every check needs worked out once."""
 
-    __slots__ = ("bare", "fixed_prefix", "icase", "pattern", "spec", "wild")
+    __slots__ = ("bare", "core", "fixed_prefix", "icase", "spec", "wild")
 
     def __init__(self, spec: str, pattern: str, icase: bool) -> None:
         """Hold one pattern.
@@ -66,18 +198,18 @@ class Barred:
             icase: Whether matching ignores case.
         """
         self.spec = spec
-        self.pattern = pattern
         self.icase = icase
         bare = pattern.rstrip("/")
-        self.bare = bare.lower() if icase else bare
+        self.bare = self._fold(bare)
         self.wild = _has_wildcard(bare)
-        cut = next((i for i, c in enumerate(pattern) if c in _WILDCARDS), None)
+        self.core = self._fold(bare.strip("*?").rstrip("/")) or self.bare
+        cut = next((i for i, c in enumerate(bare) if c in _WILDCARDS), None)
         if cut is None:
             prefix = bare
         else:
-            head = pattern[:cut]
+            head = bare[:cut]
             prefix = head[: head.rfind("/")] if "/" in head else ""
-        self.fixed_prefix = prefix.lower() if icase else prefix
+        self.fixed_prefix = self._fold(prefix)
 
     def _fold(self, path: str) -> str:
         return path.lower() if self.icase else path
@@ -98,32 +230,37 @@ class Barred:
             path, self.bare + "/*"
         )
 
-    def reachable_from(self, rel_root: str) -> bool:
+    def reachable_from(self, rel_root: str, anywhere: bool) -> bool:
         """Whether a recursive search starting at ``rel_root`` could reach a barred path.
 
         Args:
             rel_root: The search root relative to the project root; ``""`` is the root itself.
+            anywhere: Whether a pattern with no fixed folder counts as reachable from any root.
 
         Returns:
             ``True`` when the root is barred, or is the pattern's fixed folder or an ancestor.
         """
         if rel_root and self.matches(rel_root):
             return True
+        if not self.fixed_prefix:
+            return anywhere
         root = self._fold(rel_root)
         prefix = self.fixed_prefix
-        return not root or not prefix or prefix == root or prefix.startswith(root + "/")
+        return not root or prefix == root or prefix.startswith(root + "/")
 
-    def named_in(self, text: str) -> bool:
-        """Whether a command's text names this pattern as an exclusion.
+    def excluded_by(self, exclusions: Iterable[str]) -> bool:
+        """Whether one of a command's exclusion values names this pattern.
 
         Args:
-            text: The command segment's text.
+            exclusions: The values the command passes in exclusion form.
 
         Returns:
-            ``True`` when the whole pathspec, or its bare pattern, appears in the text.
+            ``True`` when the whole pathspec is passed, or an exclusion value contains the
+            pattern's fixed text.
         """
-        core = self.pattern.rstrip("/")
-        return self.spec in text or (bool(core) and core in text)
+        return any(
+            value == self.spec or self.core in self._fold(value) for value in exclusions
+        )
 
 
 def parse_spec(spec: str) -> Barred | None:
@@ -166,7 +303,7 @@ def relative(path: str, project_dir: str, cwd: str) -> str | None:
     return joined[len(root) + 1 :].replace(os.sep, "/")
 
 
-def _exclusions(patterns: Iterable[Barred]) -> str:
+def _exclusions_text(patterns: Iterable[Barred]) -> str:
     return " ".join(f"'{p.spec}'" for p in patterns)
 
 
@@ -175,6 +312,153 @@ def _glob_head(token: str) -> str:
     cut = next(i for i, c in enumerate(token) if c in _WILDCARDS)
     head = token[:cut]
     return head[: head.rfind("/")] if "/" in head else ""
+
+
+def strip_redirections(segment: list[str]) -> list[str]:
+    """A segment without its redirections: ``2>/dev/null`` and ``< file`` go, with their targets.
+
+    Args:
+        segment: One simple command's tokens.
+
+    Returns:
+        The tokens that are the command and its arguments.
+    """
+    kept: list[str] = []
+    skip_next = False
+    for index, token in enumerate(segment):
+        if skip_next:
+            skip_next = False
+            continue
+        if token and set(token) <= set("<>&"):
+            skip_next = True
+            continue
+        following = segment[index + 1] if index + 1 < len(segment) else ""
+        if token.isdigit() and following and set(following) <= set("<>&"):
+            continue
+        kept.append(token)
+    return kept
+
+
+def positionals(args: list[str], value_flags: frozenset[str]) -> list[str]:
+    """The non-option arguments, skipping each value-taking flag's value.
+
+    Args:
+        args: The arguments after the command name.
+        value_flags: The flags that take the next token as their value.
+
+    Returns:
+        The positional arguments, in order.
+    """
+    result: list[str] = []
+    skip = False
+    for index, arg in enumerate(args):
+        if skip:
+            skip = False
+            continue
+        if arg == "--":
+            result += args[index + 1 :]
+            break
+        if arg in value_flags:
+            skip = True
+            continue
+        if arg.startswith("-"):
+            continue
+        result.append(arg)
+    return result
+
+
+def exclusion_values(name: str, args: list[str]) -> list[str]:
+    """The values a search command passes in an exclusion form.
+
+    Args:
+        name: The command's name.
+        args: Its arguments.
+
+    Returns:
+        Every value that excludes something.
+    """
+    values: list[str] = []
+    negated_find = name == "find" and any(a in {"-not", "!", "-prune"} for a in args)
+    for index, arg in enumerate(args):
+        following = args[index + 1] if index + 1 < len(args) else ""
+        if arg.startswith((":(", ":!", ":^")) and (
+            not arg.startswith(":(") or "exclude" in arg
+        ):
+            values.append(arg)
+        elif "=" in arg and arg.split("=", 1)[0] in _EXCLUDE_FLAGS:
+            values.append(arg.split("=", 1)[1])
+        elif arg in _EXCLUDE_FLAGS or arg in _GLOB_FLAGS and following.startswith("!"):
+            values.append(following)
+        elif "=" in arg and arg.split("=", 1)[0] in _GLOB_FLAGS and "=!" in arg:
+            values.append(arg.split("=", 1)[1])
+        elif negated_find and arg in _FIND_NAME_TESTS:
+            values.append(following)
+    return [v for v in values if v]
+
+
+class Search:
+    """A recursive search command: where it starts and what it excludes."""
+
+    __slots__ = ("exclusions", "roots")
+
+    def __init__(self, roots: list[str], exclusions: list[str]) -> None:
+        """Hold the start folders and the exclusion values."""
+        self.roots = roots
+        self.exclusions = exclusions
+
+
+def search_of(name: str, args: list[str]) -> Search | None:
+    """The search a command runs, or ``None`` when it isn't a recursive search.
+
+    Args:
+        name: The command's name, without its folder.
+        args: Its arguments, redirections removed.
+
+    Returns:
+        The search's start folders (``"."`` when none is named) and exclusions.
+    """
+    exclusions = exclusion_values(name, args)
+    if name == "git":
+        root = "."
+        rest = list(args)
+        while rest and rest[0].startswith("-"):
+            flag = rest.pop(0)
+            if flag in _GIT_GLOBAL_VALUE_FLAGS and rest:
+                value = rest.pop(0)
+                if flag == "-C":
+                    root = os.path.join(root, value)
+        if not rest or rest[0] not in _GIT_LISTERS:
+            return None
+        return Search([root], exclusions)
+    if name == "ls":
+        short = [a for a in args if a.startswith("-") and not a.startswith("--")]
+        if "--recursive" not in args and not any("R" in a for a in short):
+            return None
+        return Search(positionals(args, frozenset()) or ["."], exclusions)
+    if name == "find":
+        roots: list[str] = []
+        for arg in args:
+            if arg.startswith("-") or arg in {"(", "!", ")"}:
+                break
+            roots.append(arg)
+        return Search(roots or ["."], exclusions)
+    if name not in _VALUE_FLAGS:
+        return None
+    if name in {"grep", "egrep", "fgrep"}:
+        short = [a for a in args if a.startswith("-") and not a.startswith("--")]
+        recursive = any(
+            a in {"--recursive", "--dereference-recursive"} for a in args
+        ) or any(("r" in a or "R" in a) for a in short)
+        if not recursive:
+            return None
+    words = positionals(args, _VALUE_FLAGS[name])
+    if name == "tree":
+        return Search(words or ["."], exclusions)
+    pattern_given = name not in {"fd", "ag"} and any(
+        a in {"-e", "-f", "--regexp", "--file"} for a in args
+    )
+    paths = words if pattern_given else words[1:]
+    return Search(paths or ["."], exclusions)
 
 
 class Guard:
@@ -192,42 +476,50 @@ class Guard:
         self.project_dir = project_dir
         self.cwd = cwd
 
-    def barred(self, path: str) -> Barred | None:
+    def barred(self, path: str, cwd: str | None = None) -> Barred | None:
         """The first pattern that bars ``path``, if any."""
-        rel = relative(path, self.project_dir, self.cwd)
+        rel = relative(path, self.project_dir, cwd or self.cwd)
         if not rel:
             return None
         return next((p for p in self.patterns if p.matches(rel)), None)
 
-    def unpruned(self, root: str, text: str) -> list[Barred]:
-        """Patterns a recursive search from ``root`` could reach and ``text`` doesn't exclude."""
-        rel = relative(root, self.project_dir, self.cwd)
+    def reachable(self, root: str, cwd: str, anywhere: bool) -> list[Barred]:
+        """The patterns a recursive search from ``root`` could reach."""
+        rel = relative(root, self.project_dir, cwd)
         if rel is None:
             return []
-        return [
-            p for p in self.patterns if p.reachable_from(rel) and not p.named_in(text)
-        ]
+        return [p for p in self.patterns if p.reachable_from(rel, anywhere)]
 
-    def token_hit(self, token: str) -> tuple[str, Barred] | None:
-        """The barred path a command argument names, with its pattern, if any.
+    def token_hit(self, token: str, cwd: str) -> tuple[str, Barred] | None:
+        """The existing barred path a command argument names, with its pattern, if any.
 
-        A plain argument counts when a pattern matches it and it holds a ``/`` or exists under
-        the working directory, so a search word such as ``TODO`` is not mistaken for a path. A
-        wildcard argument counts when its fixed leading folder is barred.
+        Only arguments naming something that exists count, so a branch name, a URL or a commit
+        message that merely contains a barred word passes. A wildcard argument counts when its
+        fixed leading folder is barred.
         """
         if token.startswith("-") and "=" in token:
             token = token.split("=", 1)[1]
-        if not token or token.startswith((":(", ":!", ":^", "-")):
+        if not token or token.startswith((":(", ":!", ":^", "-")) or "://" in token:
+            return None
+        if any(c.isspace() for c in token):
             return None
         candidate = _glob_head(token) if _has_wildcard(token) else token
         if not candidate:
             return None
-        hit = self.barred(candidate)
-        if hit is None:
-            return None
-        if "/" in candidate or os.path.lexists(os.path.join(self.cwd, candidate)):
+        hit = self.barred(candidate, cwd)
+        if hit is not None and os.path.lexists(os.path.join(cwd, candidate)):
             return candidate, hit
         return None
+
+    def revision_path_hit(self, token: str) -> tuple[str, Barred] | None:
+        """A ``<rev>:<path>`` argument naming a barred path, as ``git show HEAD:secrets/key``."""
+        if ":" not in token or token.startswith(":("):
+            return None
+        path = token.split(":", 1)[1].removeprefix("./")
+        if not path:
+            return None
+        hit = next((p for p in self.patterns if p.matches(path)), None)
+        return (path, hit) if hit is not None else None
 
     def read(self, tool_input: Mapping[str, Any]) -> dict[str, Any] | None:
         """Decide a ``Read`` call."""
@@ -247,87 +539,99 @@ class Guard:
             return hook_io.permission(
                 "deny", f"{tool} refused: its root is barred by {hit.spec}."
             )
-        reachable = self.unpruned(root, "")
+        reachable = self.reachable(root, self.cwd, anywhere=False)
         if not reachable:
             return None
         return hook_io.permission(
             "deny",
-            f"{tool} refused: a search from here could reach barred paths, and {tool} takes no "
-            "exclusions. Search with git grep or git ls-files and add these pathspecs to the "
-            f"command: {_exclusions(reachable)}",
+            f"{tool} refused: a search from here reaches a barred folder, and {tool} takes no "
+            "exclusions. Search a folder below it, or use git grep or git ls-files with these "
+            f"pathspecs in the command: {_exclusions_text(reachable)}",
         )
 
-    def bash(self, command: str) -> dict[str, Any] | None:
+    def bash(self, command: str, depth: int = 0) -> dict[str, Any] | None:
         """Decide a ``Bash`` call."""
         try:
             segments = hook_io.segments(command)
         except ValueError:
             reason = "The barred-folder guard could not parse this command. Check it."
             return hook_io.permission("ask", reason)
-        for segment in segments:
-            for token in segment:
-                if found := self.token_hit(token):
-                    candidate, hit = found
-                    reason = f"Command refused: {candidate} is barred by {hit.spec}."
-                    return hook_io.permission("deny", reason)
-            roots = search_roots(segment)
-            if roots is None:
+        cwd = self.cwd
+        for raw in segments:
+            segment = strip_redirections(raw)
+            start = hook_io.command_start(segment)
+            if start >= len(segment):
                 continue
-            text = " ".join(segment)
+            name = hook_io.program(segment[start])
+            args = segment[start + 1 :]
+            if name == "cd":
+                cwd = (
+                    os.path.normpath(os.path.join(cwd, args[0]))
+                    if args
+                    else self.project_dir
+                )
+                continue
+            if name in _SHELLS and "-c" in args and depth < 2:
+                index = args.index("-c")
+                if index + 1 < len(args) and (
+                    inner := self.bash_in(args[index + 1], cwd, depth)
+                ):
+                    return inner
+                continue
+            if out := self._arguments(name, args, cwd):
+                return out
+            search = search_of(name, args)
+            if search is None:
+                continue
             missing: list[Barred] = []
-            for root in roots:
-                missing += [p for p in self.unpruned(root, text) if p not in missing]
+            for root in search.roots:
+                for pattern in self.reachable(root, cwd, anywhere=True):
+                    if (
+                        not pattern.excluded_by(search.exclusions)
+                        and pattern not in missing
+                    ):
+                        missing.append(pattern)
             if missing:
                 return hook_io.permission(
                     "deny",
                     "Search refused: it starts at or above a barred folder and names no "
-                    f"exclusion for it. Prune these inside the command itself: "
-                    f"{_exclusions(missing)}",
+                    "exclusion for it. Prune these inside the command itself: "
+                    f"{_exclusions_text(missing)}",
                 )
         return None
 
+    def bash_in(self, command: str, cwd: str, depth: int) -> dict[str, Any] | None:
+        """Decide a command run through ``sh -c``, from the working directory it inherits."""
+        inner = Guard(self.patterns, self.project_dir, cwd)
+        return inner.bash(command, depth + 1)
 
-def search_roots(segment: list[str]) -> list[str] | None:
-    """The folders a recursive search command starts from, or ``None`` if it isn't one.
-
-    Args:
-        segment: One shell command's tokens.
-
-    Returns:
-        The start folders (``"."`` when none is named), or ``None`` for a non-search command.
-    """
-    start = hook_io.command_start(segment)
-    if start >= len(segment):
-        return None
-    name = hook_io.program(segment[start])
-    args = segment[start + 1 :]
-    positional = [a for a in args if not a.startswith("-")]
-    if name == "git":
-        return ["."] if positional[:1] and positional[0] in _GIT_LISTERS else None
-    if name == "ls":
-        short = [a for a in args if a.startswith("-") and not a.startswith("--")]
-        if "--recursive" not in args and not any("R" in a for a in short):
+    def _arguments(self, name: str, args: list[str], cwd: str) -> dict[str, Any] | None:
+        if name == "git":
+            words = positionals(args, _GIT_GLOBAL_VALUE_FLAGS)
+            if not words or words[0] not in _GIT_FILE_READERS:
+                return None
+            for token in words[1:]:
+                found = self.revision_path_hit(token) or self.token_hit(token, cwd)
+                if found:
+                    return hook_io.permission(
+                        "deny",
+                        f"Command refused: {found[0]} is barred by {found[1].spec}.",
+                    )
             return None
-        return positional or ["."]
-    if name in _GREP_TOOLS:
-        recursive = any(
-            a in {"--recursive", "--dereference-recursive"}
-            or (a.startswith("-") and not a.startswith("--") and ("r" in a or "R" in a))
-            for a in args
-        )
-        return (positional[1:] or ["."]) if recursive else None
-    if name in _PATTERN_FIRST_TOOLS:
-        return positional[1:] or ["."]
-    if name == "find":
-        roots: list[str] = []
-        for arg in args:
-            if arg.startswith("-") or arg in {"(", "!", ")"}:
-                break
-            roots.append(arg)
-        return roots or ["."]
-    if name == "tree":
-        return positional or ["."]
-    return None
+        excluded = set(exclusion_values(name, args))
+        for token in args:
+            value = (
+                token.split("=", 1)[1]
+                if token.startswith("-") and "=" in token
+                else token
+            )
+            if value in excluded:
+                continue
+            if found := self.token_hit(token, cwd):
+                return hook_io.permission(
+                    "deny", f"Command refused: {found[0]} is barred by {found[1].spec}."
+                )
+        return None
 
 
 def decide(
@@ -357,7 +661,7 @@ def decide(
     tool_input = payload.get("tool_input")
     if not patterns or not isinstance(tool_input, dict):
         return None
-    project_dir = pm_settings.project_dir(env)
+    project_dir = settings.project_root or pm_settings.project_dir(env)
     cwd = payload.get("cwd")
     guard = Guard(
         patterns, project_dir, cwd if isinstance(cwd, str) and cwd else project_dir

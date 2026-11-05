@@ -20,7 +20,9 @@ def env_with(project: ProjectFactory, specs: list[str] | None = None) -> dict[st
     env = project({"hooks": {"barred_paths": True}, "barred_paths": specs or SPECS})
     root = Path(env["CLAUDE_PROJECT_DIR"])
     (root / "secrets").mkdir()
+    (root / "secrets" / "key.pem").write_text("x", encoding="utf-8")
     (root / "src").mkdir()
+    (root / "src" / "a.py").write_text("x", encoding="utf-8")
     (root / "vendor" / "raw").mkdir(parents=True)
     return env
 
@@ -48,7 +50,7 @@ def test_parse_spec() -> None:
     barred = bp.parse_spec(":(top,exclude,icase)*_private*")
     assert barred is not None
     assert barred.icase
-    assert barred.pattern == "*_private*"
+    assert barred.core == "_private"
     assert barred.fixed_prefix == ""
     folder = bp.parse_spec(":(top,exclude)vendor/raw")
     assert folder is not None
@@ -201,3 +203,75 @@ def test_hooks_json_matcher_covers_the_guarded_tools() -> None:
     assert commands == {
         "|".join(sorted(bp.GUARDED_TOOLS, key=["Read", "Grep", "Glob", "Bash"].index))
     }
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -rn foo 2>/dev/null",
+        "grep -r -A 3 foo",
+        'grep -rn --include "*.py" foo',
+        "rg -t py foo",
+        'rg -g "*.py" TODO',
+        "fd -e py foo",
+        "git -C . grep foo",
+        'rg "api_secrets_key"',
+        'grep -rn "load secrets" .',
+        "cd src && grep -rn secrets ..",
+        "bash -c 'grep -rn foo .'",
+        "git show HEAD:secrets/key.pem",
+    ],
+)
+def test_ordinary_unpruned_searches_are_denied(
+    project: ProjectFactory, command: str
+) -> None:
+    env = env_with(project, [":(top,exclude)secrets/"])
+    assert decision(call("Bash", {"command": command}, env)) == "deny", command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -rn foo --exclude-dir=secrets .",
+        "rg foo -g '!secrets/**'",
+        "find . -not -path './secrets/*' -name '*.py'",
+        "find . -path ./secrets -prune -o -name '*.py' -print",
+        "git grep foo -- ':(exclude)secrets'",
+        "grep -rn foo src",
+        "rg foo src",
+    ],
+)
+def test_pruned_or_scoped_searches_pass(project: ProjectFactory, command: str) -> None:
+    env = env_with(project, [":(top,exclude)secrets/"])
+    assert call("Bash", {"command": command}, env) is None, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'git commit -m "secrets/ is now ignored"',
+        "git push origin secrets/rotate",
+        "git switch -c feature/private-beta",
+        "curl -s https://api.example.com/private/x",
+        "gh pr create --head feature/private-beta",
+    ],
+)
+def test_words_that_only_look_barred_pass(
+    project: ProjectFactory, command: str
+) -> None:
+    env = env_with(project)
+    assert call("Bash", {"command": command}, env) is None, command
+
+
+def test_grep_tool_below_or_beside_a_wildcard_pattern_passes(
+    project: ProjectFactory,
+) -> None:
+    env = env_with(project, [":(top,exclude,icase)*private*"])
+    root = env["CLAUDE_PROJECT_DIR"]
+    assert call("Grep", {"pattern": "x", "path": root + "/src"}, env) is None
+    assert call("Glob", {"pattern": "**/*.py"}, env) is None
+
+
+def test_grep_tool_from_above_a_barred_folder_denied(project: ProjectFactory) -> None:
+    env = env_with(project, [":(top,exclude)secrets/"])
+    assert decision(call("Grep", {"pattern": "TODO"}, env)) == "deny"

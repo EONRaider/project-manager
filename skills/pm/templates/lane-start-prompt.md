@@ -18,10 +18,11 @@ You are a lane on `<repository>`. Your unit: **<unit name>**, tracked as sub-iss
 ```bash
 git fetch origin
 git switch -c <branch> <base SHA>
-git merge-base --is-ancestor <base SHA> HEAD
+git rev-parse HEAD
 ```
 
-Stop and tell the PM if either command fails.
+The last command must print `<base SHA>` in full. Stop and tell the PM if any command fails or
+it prints anything else.
 
 **Steps.**
 <the sub-issue's steps, in order>

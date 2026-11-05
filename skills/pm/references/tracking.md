@@ -3,8 +3,8 @@
 Git and GitHub hold the whole record: issues for plans and units, the Project board for status,
 comments for rulings and reports, and the rulings branch for the approved plan texts, the
 register, handoffs and the state note. Only the PM writes issue bodies, checkboxes, the board,
-labels, dependencies and the rulings branch. A lane writes only comments on its own unit's
-sub-issue and its own pull request.
+labels, dependencies and the rulings branch. A lane writes only its own pull request and
+comments on its own unit's sub-issue.
 
 Transport: the GitHub MCP server's tools where loaded (`issue_write`, `sub_issue_write`,
 `add_issue_comment`, `list_issues`, `issue_read`), otherwise `gh`. The board has no MCP tool; it
@@ -12,8 +12,9 @@ needs `gh project ...` with the `project` scope (`gh auth refresh -s project`).
 
 ## Identity and search
 
-- Titles are the identity keys. Plan issue: `Plan: <plan title>`. Unit sub-issue:
-  `[Plan #<n>] Unit <k>: <unit name>`. Labels are filters, never identity.
+- Titles are the identity keys. Stage issue: `Stage: <stage name>`. Plan issue:
+  `Plan: <plan title>`. Unit sub-issue: `[Plan #<n>] Phase <k>: <unit name>`. Labels are
+  filters, never identity.
 - Search before you create. Check for the exact title with a list call (`list_issues`, both
   states, or `gh issue list --state all --search "in:title ..."` confirmed by the exact title).
   The search index can lag fresh writes, so a list call decides existence.
@@ -23,18 +24,41 @@ needs `gh project ...` with the `project` scope (`gh auth refresh -s project`).
   Plan text: plans/<date>-<slug>.md @ <commit SHA on the rulings branch>
   ```
 
+Every `gh` command below runs against `<tracker_repo>` (add `-R <tracker_repo>` when the
+current folder is another repository).
+
+## Stages
+
+A stage groups plans that serve one larger goal, such as a release. A stage is an issue titled
+`Stage: <name>`, labelled `pm:stage`, with its plans as sub-issues. Open a stage only for a goal
+the decider names; small projects need none, and a plan may stand alone.
+
 ## Plan issue and units
 
-1. Create the plan issue: issue type `Task` (or `type:task` label when the repository has no
+1. Create the plan issue (as a sub-issue of its stage, when it has one): issue type `Task` (or `type:task` label when the repository has no
    issue types), body = marker line, one plain paragraph of scope, the approval ruling's link once
    posted, and a unit list as `- [ ]` items.
 2. Post the approval ruling as its first comment ("Rulings" below).
 3. For each unit, create a sub-issue (`issue_write` with `parent_issue_number`, or
    `gh issue create --parent <n>`): goal, steps as `- [ ]` checkboxes, the checks that prove it,
    the files it touches. A dependency on another unit is an issue dependency
-   (`gh issue edit <n> --add-blocked-by <m>`), never a status line in a body.
+   (`gh issue edit <n> --add-blocked-by <m>`), never a status line in a body. Older `gh`
+   releases lack `--parent` and `--add-blocked-by`; use the REST API instead, where `<id>` is
+   the other issue's numeric id (`gh api repos/<tracker_repo>/issues/<m> --jq .id`):
+
+   ```bash
+   gh api repos/<tracker_repo>/issues/<parent>/sub_issues -F sub_issue_id=<id>
+   gh api repos/<tracker_repo>/issues/<n>/dependencies/blocked_by -F issue_id=<id>
+   ```
 4. Edit the plan body so each unit item names its sub-issue.
-5. Add the plan issue and every sub-issue to the Project board, Status `Todo`.
+5. Add the plan issue and every sub-issue to the Project board, Status `Todo`, and set each
+   one's `Priority`.
+
+## Priority
+
+The board's `Priority` field: `P0` (drop other work), `P1` (next), `P2` (soon), `P3` (when
+there is room). Set it from real urgency and blast radius, never one value for everything. A
+unit inherits its plan's priority unless the plan says otherwise.
 
 Edit a body only from a copy fetched immediately before, with the smallest change. A body is
 last-write-wins.
@@ -56,12 +80,13 @@ The board's built-in "item closed" workflow sets Done whatever the close reason.
 the decider to turn it off, so you set Done or Deferred yourself after each close. Re-read the
 item afterwards and fix it once if it reads wrong.
 
-Commands (field and option ids come from `gh project field-list <number> --owner <owner>
---format json`):
+Commands. The project's id comes from `gh project view <number> --owner <owner> --format json`
+(its `id`), field and option ids from `gh project field-list <number> --owner <owner> --format
+json`, and an item's id from `item-add`'s own output:
 
 ```bash
-gh project item-add <number> --owner <owner> --url <issue URL>
-gh project item-edit --id <item id> --project-id <project id> --field-id <status field id> --single-select-option-id <option id>
+gh project item-add <number> --owner <owner> --url <issue URL> --format json
+gh project item-edit --id <item id> --project-id <project id> --field-id <field id> --single-select-option-id <option id>
 ```
 
 ## When a session can't write

@@ -7,11 +7,11 @@ the project's settings file. It goes in the prompt itself, never as a path to th
 
 Rules for this lane (binding):
 
-1. You implement one unit. The PM (the session titled `<pm_title_prefix>...`) decides, reviews
-   and records. You never review your own work. On GitHub you write only comments on your own
-   unit's sub-issue and your own pull request. You never edit an issue body, the Project board,
-   a label, or the `<rulings_branch>` branch, and you never post a comment that opens with
-   `Ruling:`.
+1. You implement one unit. The PM (the session titled `<pm_title_prefix>...`) decides, reviews and
+   records. You never review your own work. On GitHub you write only your own pull request (opening
+   it and commenting on it) and comments on your own unit's sub-issue. You never edit an issue body,
+   the Project board, a label, or the `<rulings_branch>` branch, and you never post a comment that
+   opens with `Ruling:`.
 2. Report to the PM by `SendMessage`, addressed by its current title from `ListAgents`: the
    newest session whose title starts with `<pm_title_prefix>` and doesn't end in "Handed Off" or
    "On hold". Report after each meaningful step, after any GitHub write, and when blocked: one

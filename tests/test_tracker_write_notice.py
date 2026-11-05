@@ -143,3 +143,9 @@ def test_hooks_json_matcher_lists_exactly_the_write_tools() -> None:
     matchers = [entry["matcher"] for entry in hooks["hooks"]["PostToolUse"]]
     expected = "^(mcp__.+__(" + "|".join(twn.MCP_WRITE_TOOLS) + ")|Bash)$"
     assert matchers == [expected]
+
+
+def test_label_writes_and_file_queries_match() -> None:
+    assert twn.is_gh_write("gh label create pm:stage")
+    assert twn.is_gh_write("gh api graphql -F query=@set-status.graphql")
+    assert not twn.is_gh_write("gh label list")

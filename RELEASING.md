@@ -3,13 +3,14 @@
 Users install project-manager through the `eonraider` marketplace (`EONRaider/claude-plugins`),
 which pins each plugin to a tag and a commit SHA. Merging to `main` alone ships nothing.
 
-1. **Trial.** Before the first release, the trial in the design note's section 17 has passed, or
-   the decider has waived a step in writing.
-2. **Rerun the evals that cover simplicity.** This plugin depends on simplicity by name, with no
-   version range, so it follows simplicity's latest release. Rerun the handoff steps of the trial
-   after each simplicity release.
+1. **Trial.** Before the first release, the trial has passed (the design note's section 17, run
+   from a cloud session as the decider ruled), or the decider has waived a step in writing.
+2. **Recheck simplicity.** This plugin depends on simplicity by name, with no version range, so it
+   follows simplicity's latest release. After each simplicity release, rerun the trial's handoff
+   steps, and check that its context hook and its shift question still behave as
+   `skills/pm/references/usage.md` describes.
 3. **Bump the version** in `.claude-plugin/plugin.json`.
-4. **Security scan** each skill with SkillArtisan's `scripts/security_scan.py` (needs
+4. **Security scan** each skill (not yet run for 0.1.0: `gitleaks` was not available) with SkillArtisan's `scripts/security_scan.py` (needs
    `gitleaks`) and commit the `.security-scan-passed` markers.
 5. **Validate**: `claude plugin validate --strict .`
 6. **Date the changelog.**

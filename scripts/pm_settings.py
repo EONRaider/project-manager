@@ -90,6 +90,7 @@ class Settings:
         "notes_dir",
         "pm_title_prefix",
         "project",
+        "project_root",
         "review_model",
         "rulings_branch",
         "rulings_path",
@@ -112,8 +113,9 @@ class Settings:
         hooks: Mapping[str, bool] | None = None,
         shorthand: Shorthand | None = None,
         warnings: tuple[str, ...] = (),
+        project_root: str = "",
     ) -> None:
-        """Hold one value per settings key."""
+        """Hold one value per settings key, plus the folder the file was found in."""
         self.tracker_repo = tracker_repo
         self.project = project
         self.decider = decider
@@ -126,6 +128,7 @@ class Settings:
         self.hooks: Mapping[str, bool] = hooks or {}
         self.shorthand = shorthand or Shorthand()
         self.warnings = warnings
+        self.project_root = project_root
 
     def hook_enabled(self, name: str) -> bool:
         """Whether the hook called ``name`` is switched on.
@@ -149,7 +152,9 @@ _STRING_KEYS = (
     "review_model",
 )
 
-KNOWN_KEYS = (frozenset(Settings.__slots__) - {"warnings"}) | {"$schema_version"}
+KNOWN_KEYS = (frozenset(Settings.__slots__) - {"warnings", "project_root"}) | {
+    "$schema_version"
+}
 
 
 def project_dir(env: Mapping[str, str] | None = None) -> str:
@@ -168,14 +173,29 @@ def project_dir(env: Mapping[str, str] | None = None) -> str:
 def settings_path(env: Mapping[str, str] | None = None) -> str | None:
     """The settings file's path, or ``None`` when the project directory is unknown.
 
+    A session started in a subfolder gets that subfolder as ``CLAUDE_PROJECT_DIR``, so the
+    search walks up from it to the first folder holding the file, stopping at the repository
+    root (a folder holding ``.git``). With no file anywhere, the path under the starting folder
+    is returned.
+
     Args:
         env: The environment to read ``CLAUDE_PROJECT_DIR`` from. Defaults to ``os.environ``.
 
     Returns:
         The absolute path of the settings file, whether or not it exists.
     """
-    root = project_dir(env)
-    return os.path.join(root, SETTINGS_RELATIVE_PATH) if root else None
+    start = project_dir(env)
+    if not start:
+        return None
+    folder = os.path.abspath(start)
+    while True:
+        candidate = os.path.join(folder, SETTINGS_RELATIVE_PATH)
+        if os.path.isfile(candidate):
+            return candidate
+        parent = os.path.dirname(folder)
+        if parent == folder or os.path.exists(os.path.join(folder, ".git")):
+            return os.path.join(os.path.abspath(start), SETTINGS_RELATIVE_PATH)
+        folder = parent
 
 
 def _string_tuple(raw: Mapping[str, Any], key: str) -> tuple[str, ...]:
@@ -253,6 +273,9 @@ def parse(raw: object) -> Settings:
         fields["hooks"] = _hooks(raw["hooks"], warnings)
     if "shorthand" in raw:
         fields["shorthand"] = _shorthand(raw["shorthand"])
+    notes_dir = fields.get("notes_dir", "")
+    if notes_dir and not os.path.isabs(notes_dir):
+        raise SettingsError("notes_dir must be an absolute path")
     return Settings(**fields, warnings=tuple(warnings))
 
 
@@ -276,7 +299,9 @@ def load(env: Mapping[str, str] | None = None) -> Settings | None:
             raw = json.load(handle)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SettingsError(f"cannot read {os.path.basename(path)}: {exc}") from exc
-    return parse(raw)
+    settings = parse(raw)
+    settings.project_root = os.path.dirname(os.path.dirname(path))
+    return settings
 
 
 def enabled_settings(

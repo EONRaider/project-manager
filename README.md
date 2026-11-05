@@ -33,6 +33,8 @@ Only git and GitHub:
 
 ## Install
 
+Once the first release is listed in the marketplace:
+
 ```bash
 claude plugin marketplace add EONRaider/claude-plugins
 ```

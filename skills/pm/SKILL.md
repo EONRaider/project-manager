@@ -17,6 +17,10 @@ Read `${CLAUDE_SKILL_DIR}/references/rules.md` now and keep to it all session. I
 standing rules: evidence labels, plain language, authority, refusals, failure reports, model
 routing. Every other reference loads when a step below names it.
 
+Paths: this skill's folder is `${CLAUDE_SKILL_DIR}` and the plugin's root is
+`${CLAUDE_PLUGIN_ROOT}`. A path in a reference such as `templates/handoff.md` is relative to this
+skill's folder; `docs/desktop-app-notes.md` is relative to the plugin's root.
+
 ## 0. Settings
 
 The project's settings file is `.claude/project-manager.json` at the project root. Check it:
@@ -27,7 +31,8 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pm_settings.py" --project-dir "$(git rev-
 
 - `absent`: run `/project-manager:pm-setup` first, then come back.
 - `invalid`: tell the decider what is wrong, in plain words, and stop.
-- `valid`: read the file. Its values fill every `<setting>` below.
+- `valid`: read the file. Its values fill every `<setting>` below. If `tracker_repo` or
+  `notes_dir` is empty, run `/project-manager:pm-setup` to fill it first.
 
 ## 1. Start or resume
 
@@ -66,7 +71,7 @@ as one phase sub-issue of its plan's issue. A **plan** groups one or more units.
    2. Open the plan issue, its body linking that commit, and post the approval ruling as the
       issue's first comment.
    3. Commit the register row for that ruling.
-   4. Open one phase sub-issue per unit, and add each to the Project board.
+   4. Open one phase sub-issue per unit, and add each to the Project board with its priority.
 
 ## 3. Dispatch
 

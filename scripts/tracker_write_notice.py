@@ -90,7 +90,9 @@ def _gh_args(segment: list[str]) -> list[str] | None:
 
 def _is_api_write(args: list[str]) -> bool:
     if "graphql" in args:
-        return bool(re.search(r"\bmutation\b", " ".join(args)))
+        # A query read from a file (`-F query=@file`) can't be inspected; count it as a write.
+        joined = " ".join(args)
+        return bool(re.search(r"\bmutation\b", joined)) or "=@" in joined
     for index, token in enumerate(args):
         if token in {"-X", "--method"} and index + 1 < len(args):
             return args[index + 1].upper() in WRITE_METHODS
@@ -117,14 +119,18 @@ def is_gh_write(command: str) -> bool:
     try:
         segments = hook_io.segments(command)
     except ValueError:
-        return bool(re.search(r"\bgh\s+(?:issue|pr|project|api)\b", command))
+        return bool(re.search(r"\bgh\s+(?:issue|pr|project|label|api)\b", command))
     for segment in segments:
         args = _gh_args(segment)
         if not args:
             continue
         words = [a for a in args if not a.startswith("-")]
         group = next(
-            (i for i, w in enumerate(words) if w in {"issue", "pr", "project", "api"}),
+            (
+                i
+                for i, w in enumerate(words)
+                if w in {"issue", "pr", "project", "label", "api"}
+            ),
             None,
         )
         if group is None:
@@ -134,6 +140,8 @@ def is_gh_write(command: str) -> bool:
         if noun in {"issue", "pr"} and verb in GH_ISSUE_PR_WRITES:
             return True
         if noun == "project" and verb in GH_PROJECT_WRITES:
+            return True
+        if noun == "label" and verb in {"create", "edit", "delete", "clone"}:
             return True
         if noun == "api" and _is_api_write(args):
             return True

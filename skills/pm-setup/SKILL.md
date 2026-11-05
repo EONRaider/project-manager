@@ -27,10 +27,11 @@ Find, and show the user in one short list:
 
 Ask the user for the values the file needs, with a recommended default for each:
 
+- `tracker_repo`: the repository that holds plans and units, as `owner/name`, default this one;
 - `decider`: the name sessions use for the user;
 - `project`: the GitHub Project for status, an existing one by number or a new one (step 3);
 - `notes_dir`: an absolute path outside the repository for working files, default
-  `$HOME/pm-notes/<repo>` expanded to its full path;
+  `$HOME/pm-notes/<repo>` expanded to its full path (the settings check refuses a relative one);
 - `barred_paths`: folders or patterns no session may open or list, written as git pathspec
   exclusions such as `:(top,exclude)secrets/` or `:(top,exclude,icase)*private*`; none by
   default;
@@ -60,11 +61,15 @@ Needs the `project` scope; without it, list these steps for the user and move on
    board's web page (the Status field's settings, "Add option").
 4. Ask the user to open the board's Workflows page and turn off **Item closed**, so closing an
    issue as not planned doesn't mark it Done. Keep **Pull request merged** on.
+5. If the board has no `Priority` field, create it:
+   `gh project field-create <number> --owner <owner> --name Priority --data-type SINGLE_SELECT
+   --single-select-options P0,P1,P2,P3`.
 
 ## 4. Labels
 
-Only when the repository has no issue types: create `type:task` and `type:bug`
-(`gh label create`). Nothing else needs a label.
+Create `pm:stage`, for stage issues (`gh label create pm:stage --description "A stage of
+plans"`). Only when the repository has no issue types, also create `type:task` and `type:bug`.
+Nothing else needs a label.
 
 ## 5. The rulings branch
 
