@@ -11,7 +11,8 @@ from typing import Any
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 ProjectFactory = Callable[..., dict[str, str]]

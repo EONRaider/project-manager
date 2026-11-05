@@ -6,7 +6,7 @@ import json
 
 import pytest
 import tracker_write_notice as twn
-from conftest import ProjectFactory, run_script
+from conftest import ROOT, ProjectFactory, run_script
 
 ON = {"hooks": {"tracker_write_notice": True}, "pm_title_prefix": "PM "}
 
@@ -123,3 +123,23 @@ def test_main_fails_open(project: ProjectFactory) -> None:
     assert result.returncode == 0
     assert result.stdout == ""
     assert result.stderr.startswith("tracker_write_notice:")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls\ngh issue close 3",
+        "(gh pr merge 5 --merge)",
+        "time gh issue close 3",
+        "/usr/bin/gh issue comment 2 --body x",
+    ],
+)
+def test_writes_on_later_lines_or_in_brackets_match(command: str) -> None:
+    assert twn.is_gh_write(command)
+
+
+def test_hooks_json_matcher_lists_exactly_the_write_tools() -> None:
+    hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    matchers = [entry["matcher"] for entry in hooks["hooks"]["PostToolUse"]]
+    expected = "^(mcp__.+__(" + "|".join(twn.MCP_WRITE_TOOLS) + ")|Bash)$"
+    assert matchers == [expected]

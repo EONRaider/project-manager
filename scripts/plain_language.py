@@ -25,14 +25,15 @@ starting ``plain_language:`` and exits 1, which Claude Code treats as a non-bloc
 
 from __future__ import annotations
 
-import functools
-import json
 import re
-import sys
-from collections.abc import Iterable, Mapping
-from typing import Any
 
+import hook_io
 import pm_settings
+
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
+    from typing import Any
 
 PREFIX = "plain_language"
 
@@ -45,16 +46,6 @@ FILE_EXTENSIONS = (
     "md", "rst", "json", "yml", "yaml", "toml", "ini", "cfg", "sh", "zsh", "bash", "ts", "tsx",
     "js", "jsx", "mjs", "svelte", "vue", "lock", "feature", "html", "css", "scss", "sql", "txt",
 )  # fmt: skip
-
-TECH_NAME_ALLOWLIST = (
-    "Node.js",
-    "Next.js",
-    "Vue.js",
-    "Nuxt.js",
-    "Three.js",
-    "Chart.js",
-    "D3.js",
-)
 
 PATH_PREFIXES = ("./", "../", "~/")
 
@@ -88,7 +79,12 @@ GENERIC_PATTERNS = (
     re.compile(r"(?<![\w&])#(?!\d{6}(?!\w))\d{2,}(?!\w)"),
     re.compile(r"(?<![\w-])PR ?#?\d+(?!\w)"),
     re.compile(r"(?<![\w-])comment ?#?\d+(?!\w)", re.IGNORECASE),
-    re.compile(r"(?<![\w.-])[\w.-]*\w\.(?i:" + _EXT + r")(?![\w-])(?::\d+(?:-\d+)?)?"),
+    # A file name. A capitalised name ending in `.js`, such as Node.js, is a product, not a file.
+    re.compile(
+        r"(?<![\w.-])(?![A-Z][A-Za-z0-9]*\.js(?![\w.-]))[\w.-]*\w\.(?i:"
+        + _EXT
+        + r")(?![\w-])(?::\d+(?:-\d+)?)?"
+    ),
     re.compile(r"(?<![\w-])lines? \d+(?: ?[-–] ?\d+)?(?!\w)", re.IGNORECASE),
     re.compile(r"(?<![\w-])L\d{2,}(?!\w)"),
     re.compile(r"§ ?\d+(?:\.\d+)*"),
@@ -102,14 +98,14 @@ GENERIC_PATTERNS = (
 _TOKEN_PATTERN = re.compile(r"[^\s`'\"()<>\[\]{}|,;*]+")
 _FENCE_OPEN = re.compile(r"^\s*(`{3,}|~{3,})")
 _LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+# A line's lead-in: optional heading marks, an optional list marker, then the word `Source(s)`.
+_SOURCES_LEAD = r"^\s*(?:#{1,6}\s*)?(?:(?:[-*+]|\d+[.)])\s+)?[*_]{0,3}sources?"
 _SOURCES_HEADING = re.compile(
-    r"^\s*(?:#{1,6}\s*)?(?:(?:[-*+]|\d+[.)])\s+)?[*_]{0,3}sources?[*_]{0,3}:?[*_]{0,3}\s*$",
-    re.IGNORECASE,
+    _SOURCES_LEAD + r"[*_]{0,3}:?[*_]{0,3}\s*$", re.IGNORECASE
 )
 _MARKDOWN_HEADING = re.compile(r"^\s*(#{1,6})\s")
 _SOURCES_LINE = re.compile(
-    r"^\s*(?:#{1,6}\s*)?(?:(?:[-*+]|\d+[.)])\s+)?[*_]{0,3}sources?(?:\s*$|\s*:|[*_]+(?:\s|:|$))",
-    re.IGNORECASE,
+    _SOURCES_LEAD + r"(?:\s*$|\s*:|[*_]+(?:\s|:|$))", re.IGNORECASE
 )
 
 _PREFIX_SHAPE = re.compile(r"[A-Za-z][A-Za-z0-9]{0,15}")
@@ -137,10 +133,9 @@ class Scanner:
             )
         self._patterns = tuple(patterns)
         self._top_level = frozenset(shorthand.top_level_dirs)
-        self._allow = frozenset(name.lower() for name in TECH_NAME_ALLOWLIST)
-        self.is_path = functools.lru_cache(maxsize=4096)(self._is_path)
 
-    def _is_path(self, token: str) -> bool:
+    def is_path(self, token: str) -> bool:
+        """Whether a whitespace-delimited token reads as a file system path."""
         if "/" not in token:
             return False
         for prefix in PATH_PREFIXES:
@@ -178,7 +173,7 @@ class Scanner:
         def collect(matches: Iterable[tuple[int, str]]) -> None:
             mine: set[str] = set()
             for start, snippet in matches:
-                if snippet in mine or snippet.lower() in self._allow:
+                if snippet in mine:
                     continue
                 mine.add(snippet)
                 found.append((start, snippet))
@@ -377,13 +372,7 @@ def decide(
         snippets = list(dict.fromkeys(s for text in texts for s in scanner.find(text)))
         if not snippets:
             return None
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": deny_reason(snippets),
-            }
-        }
+        return hook_io.permission("deny", deny_reason(snippets))
     if event == "Stop":
         if payload.get("stop_hook_active") is True:
             return None
@@ -404,19 +393,8 @@ def main() -> int:
     Returns:
         0 normally, 1 after an internal error, which Claude Code treats as non-blocking.
     """
-    try:
-        output = decide(json.loads(sys.stdin.read()))
-    except Exception as exc:  # noqa: BLE001 -- fail open on any internal error
-        detail = " ".join(str(exc).split())
-        print(
-            f"{PREFIX}: check skipped after an internal error: {detail}",
-            file=sys.stderr,
-        )
-        return 1
-    if output is not None:
-        sys.stdout.write(json.dumps(output))
-    return 0
+    return hook_io.run(PREFIX, decide, error_exit=1)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

@@ -20,14 +20,15 @@ Fail-open policy: every path exits 0. An error prints one stderr line starting
 
 from __future__ import annotations
 
-import json
 import re
-import shlex
-import sys
-from collections.abc import Mapping
-from typing import Any
 
+import hook_io
 import pm_settings
+
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from typing import Any
 
 PREFIX = "tracker_write_notice"
 
@@ -63,8 +64,6 @@ GH_PROJECT_WRITES = frozenset(
 
 WRITE_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
 
-_SEPARATORS = frozenset({";", "&&", "||", "|", "&", "\n"})
-
 
 def notice(pm_prefix: str) -> str:
     """The reminder text.
@@ -82,25 +81,10 @@ def notice(pm_prefix: str) -> str:
     )
 
 
-def _segments(command: str) -> list[list[str]]:
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
-    lexer.whitespace_split = True
-    lexer.commenters = ""
-    segments: list[list[str]] = [[]]
-    for token in lexer:
-        if token in _SEPARATORS or set(token) <= set(";&|"):
-            segments.append([])
-        else:
-            segments[-1].append(token)
-    return [segment for segment in segments if segment]
-
-
 def _gh_args(segment: list[str]) -> list[str] | None:
-    for index, token in enumerate(segment):
-        if token == "gh" or token.endswith("/gh"):
-            return segment[index + 1 :]
-        if "=" not in token and token not in {"env", "command", "exec", "sudo"}:
-            return None
+    start = hook_io.command_start(segment)
+    if start < len(segment) and hook_io.program(segment[start]) == "gh":
+        return segment[start + 1 :]
     return None
 
 
@@ -128,8 +112,10 @@ def is_gh_write(command: str) -> bool:
     Returns:
         ``True`` when any segment of the command is such a write.
     """
+    if "gh" not in command:
+        return False
     try:
-        segments = _segments(command)
+        segments = hook_io.segments(command)
     except ValueError:
         return bool(re.search(r"\bgh\s+(?:issue|pr|project|api)\b", command))
     for segment in segments:
@@ -214,19 +200,10 @@ def main() -> int:
     """Read one hook input on stdin and print the reminder when it applies.
 
     Returns:
-        Always 0.
+        Always 0: an error is one stderr line and never shows as a hook error.
     """
-    try:
-        output = decide(json.loads(sys.stdin.read()))
-        if output is not None:
-            print(json.dumps(output))
-    except Exception as exc:  # noqa: BLE001 -- fail open: any error is one stderr line
-        print(
-            f"{PREFIX}: {type(exc).__name__}: {' '.join(str(exc).split())}",
-            file=sys.stderr,
-        )
-    return 0
+    return hook_io.run(PREFIX, decide, error_exit=0)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

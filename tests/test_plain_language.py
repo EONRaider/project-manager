@@ -176,3 +176,12 @@ def test_main_bad_shape_fails_open(project: ProjectFactory) -> None:
 def test_scan_is_linear_on_long_input() -> None:
     text = "a" * 200_000 + " #42"
     assert scan(text) == ["#42"]
+
+
+@pytest.mark.parametrize("name", ["React.js", "Alpine.js", "Ember.js", "Node.js"])
+def test_product_names_ending_in_js_pass(name: str) -> None:
+    assert scan(f"built with {name} today") == []
+
+
+def test_lowercase_js_file_still_matches() -> None:
+    assert scan("see index.js") == ["index.js"]

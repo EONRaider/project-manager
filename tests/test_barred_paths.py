@@ -7,7 +7,7 @@ from pathlib import Path
 
 import barred_paths as bp
 import pytest
-from conftest import ProjectFactory, run_script
+from conftest import ROOT, ProjectFactory, run_script
 
 SPECS = [
     ":(top,exclude)secrets/",
@@ -183,3 +183,21 @@ def test_main_fails_open(project: ProjectFactory) -> None:
     result = run_script("barred_paths.py", "nope", env_with(project))
     assert result.returncode == 1
     assert result.stdout == ""
+
+
+def test_wildcard_under_a_barred_folder_denied(project: ProjectFactory) -> None:
+    env = env_with(project)
+    assert decision(call("Bash", {"command": "cat secrets/*"}, env)) == "deny"
+    assert call("Bash", {"command": "cat src/*.py"}, env) is None
+
+
+def test_hooks_json_matcher_covers_the_guarded_tools() -> None:
+    hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    commands = {
+        entry["matcher"]
+        for entry in hooks["hooks"]["PreToolUse"]
+        if "barred_paths.py" in entry["hooks"][0]["command"]
+    }
+    assert commands == {
+        "|".join(sorted(bp.GUARDED_TOOLS, key=["Read", "Grep", "Glob", "Bash"].index))
+    }
