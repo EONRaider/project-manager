@@ -62,10 +62,10 @@ Not yet done:
    access).
 2. The decider merges or closes the trial pull request; then delete the trial repository.
 
-Open follow-ups for the decider to rule on (suggested by the outgoing trial PM; not applied,
-since each changes the method and no review round is open):
+Follow-ups from the handoff check, ruled by the decider on 2026-11-05 (`docs/decisions.md`) and
+applied without a further review:
 
-1. Write the handoff only after the turn's last tracker write, or re-read GitHub just before
-   committing it, so it is not stale by one event.
-2. Post each unit review's outcome as a comment on the pull request too, not only on the
-   sub-issue, so someone reading only the pull request sees it.
+1. The PM makes the turn's last tracker write and re-reads GitHub before committing a handoff
+   (`skills/pm/references/usage.md`, "Handing off", step 1).
+2. Each unit review's outcome is also posted on the unit's pull request
+   (`skills/pm/references/review.md`, "After the review").

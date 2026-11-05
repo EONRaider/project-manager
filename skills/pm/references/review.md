@@ -51,4 +51,6 @@ Re-run the unit's own checks yourself and spot-check the diff before you call th
 A review report is evidence toward your own check, never a substitute for it.
 
 Record the outcome on the unit's sub-issue (or the plan issue): counts by severity, what was
-fixed, what the decider ruled, and where the full findings live.
+fixed, what the decider ruled, and where the full findings live. For a unit, post the same
+outcome as a comment on its pull request too, so someone reading only the pull request sees it.
+Never approve the pull request.

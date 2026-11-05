@@ -50,7 +50,8 @@ A shift reaches the PM one of two ways, and the handoff file is written first ei
 
 The steps:
 
-1. Write `handoffs/part-<N>.md` on the rulings branch from the pm skill's own
+1. Make the turn's last tracker write first, then re-read GitHub for every lane and review in
+   flight, so the handoff is not a step behind. Write `handoffs/part-<N>.md` on the rulings branch from the pm skill's own
    `templates/handoff.md` (simplicity has no template for it):
    every lane with its title, unit, branch, SHA and whether that is on `origin`; reviews in
    flight and their round; the decider's open questions word for word; every unanswered message copied in; the
