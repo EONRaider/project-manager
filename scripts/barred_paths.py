@@ -195,6 +195,11 @@ _FILE_READERS = frozenset(
         "source", ".", "vi", "vim", "nano", "bat", "du", "ls", "python", "python3", "node",
     }
 )  # fmt: skip
+_GREP_LIKE = frozenset({"grep", "egrep", "fgrep", "rg", "ag"})
+# Flags, for any command, whose value is text such as a title or a message, never a path.
+_TEXT_FLAGS = frozenset(
+    {"--title", "--body", "--message", "-m", "--subject", "--description", "--notes"}
+)
 # Commands that only print their arguments.
 _PRINTERS = frozenset({"echo", "printf"})
 _GIT_FILE_READERS = frozenset(
@@ -285,31 +290,46 @@ class Barred:
         """
         wanted = {self.bare, self.core}
         return any(
-            value == self.spec or self._fold(normalize_exclusion(value)) in wanted
+            value == self.spec
+            or any(self._fold(part) in wanted for part in normalize_exclusion(value))
             for value in exclusions
         )
 
 
-def normalize_exclusion(value: str) -> str:
-    """An exclusion value reduced to the path it names: ``'!./secrets/**'`` gives ``secrets``.
+def normalize_exclusion(value: str) -> list[str]:
+    """An exclusion value reduced to the paths it names: ``'!./secrets/**'`` gives ``secrets``.
+
+    A brace list (``{secrets,.git}``) and a ``|``-separated list (tree's ``-I 'a|b'``) give one
+    path each.
 
     Args:
         value: One exclusion value as the command passed it.
 
     Returns:
-        The bare path or pattern.
+        The bare paths or patterns.
     """
     text = value.strip()
     if text.startswith(":(") and ")" in text:
         text = text.split(")", 1)[1]
     elif text.startswith((":!", ":^")):
-        text = text[2:]
-    text = text.removeprefix("!").removeprefix("./").removeprefix("/")
-    while text.startswith("**/"):
-        text = text[3:]
-    for suffix in ("/**", "/*", "/"):
-        text = text.removesuffix(suffix)
-    return text
+        text = text[2:].removeprefix(":")
+    parts: list[str] = []
+    if "{" in text and "}" in text:
+        head, rest = text.split("{", 1)
+        body, tail = rest.split("}", 1)
+        parts = [head + item + tail for item in body.split(",")]
+    else:
+        parts = text.split("|")
+    result: list[str] = []
+    for part in parts:
+        part = part.removeprefix("!").removeprefix("./").removeprefix("/")
+        while part.startswith(("**/", "*/")):
+            part = part.split("/", 1)[1]
+        for suffix in ("/**", "/*", "/"):
+            part = part.removesuffix(suffix)
+        if part:
+            result.append(part)
+    return result
 
 
 def parse_spec(spec: str) -> Barred | None:
@@ -344,7 +364,10 @@ def relative(path: str, project_dir: str, cwd: str) -> str | None:
         The normalized relative path with ``/`` separators, ``""`` for the root itself.
     """
     joined = os.path.normpath(os.path.join(cwd, path))
-    root = os.path.normpath(project_dir)
+    if os.path.lexists(joined):
+        # A symlink into a barred folder is the barred folder.
+        joined = os.path.realpath(joined)
+    root = os.path.realpath(project_dir)
     if joined == root:
         return ""
     if not joined.startswith(root + os.sep):
@@ -550,14 +573,15 @@ class Guard:
         return [p for p in self.patterns if p.reachable_from(rel, anywhere)]
 
     def token_hit(
-        self, token: str, cwd: str, bare_words: bool = True
+        self, token: str, cwd: str, bare_files_only: bool = False
     ) -> tuple[str, Barred] | None:
         """The existing barred path a command argument names, with its pattern, if any.
 
         Only arguments naming something that exists count, so a branch name, a URL or a commit
         message that merely contains a barred word passes. A wildcard argument counts when its
-        fixed leading folder is barred. With ``bare_words`` false, an argument without a ``/``
-        never counts: ``kubectl get secrets`` names no file.
+        fixed leading folder is barred. With ``bare_files_only``, an argument without a ``/``
+        counts only when it names an existing regular file: ``kubectl get secrets`` names a
+        folder at most, while ``openssl rsa -in key`` names a file.
         """
         if token.startswith("-") and "=" in token:
             token = token.split("=", 1)[1]
@@ -566,20 +590,35 @@ class Guard:
         if any(c.isspace() for c in token):
             return None
         candidate = _glob_head(token) if _has_wildcard(token) else token
-        if not candidate or (not bare_words and "/" not in candidate):
+        if not candidate:
             return None
         hit = self.barred(candidate, cwd)
-        if hit is not None and os.path.lexists(os.path.join(cwd, candidate)):
+        if hit is None:
+            return None
+        path = os.path.join(cwd, candidate)
+        exists = (
+            os.path.isfile(path) if bare_files_only and "/" not in candidate else None
+        )
+        if exists if exists is not None else os.path.lexists(path):
             return candidate, hit
         return None
 
-    def revision_path_hit(self, token: str) -> tuple[str, Barred] | None:
-        """A ``<rev>:<path>`` argument naming a barred path, as ``git show HEAD:secrets/key``."""
+    def revision_path_hit(self, token: str, cwd: str) -> tuple[str, Barred] | None:
+        """A ``<rev>:<path>`` argument naming a barred path, as ``git show HEAD:secrets/key``.
+
+        The path is from the repository root, except one starting ``./`` or ``../``, which git
+        reads from the working folder.
+        """
         if ":" not in token or token.startswith((":(", ":!", ":^", "-")):
             return None
-        path = token.split(":", 1)[1].removeprefix("./")
+        path = token.split(":", 1)[1]
         if not path:
             return None
+        if path.startswith(("./", "../")):
+            rel = relative(path, self.project_dir, cwd)
+            if rel is None:
+                return None
+            path = rel
         hit = next((p for p in self.patterns if p.matches(path)), None)
         return (path, hit) if hit is not None else None
 
@@ -675,17 +714,21 @@ class Guard:
             return None
         if name == "git":
             return self._git_arguments(args, cwd)
-        skip = set(exclusion_values(name, args)) | set(search_patterns(name, args))
-        bare_words = name in _FILE_READERS
-        for token in args:
+        excluded = set(exclusion_values(name, args))
+        skip = set(search_pattern_indices(name, args))
+        skip |= {i + 1 for i, a in enumerate(args) if a in _TEXT_FLAGS}
+        bare_files_only = name not in _FILE_READERS and name not in _GREP_LIKE
+        for index, token in enumerate(args):
+            if index in skip or token.split("=", 1)[0] in _TEXT_FLAGS:
+                continue
             value = (
                 token.split("=", 1)[1]
                 if token.startswith("-") and "=" in token
                 else token
             )
-            if value in skip:
+            if value in excluded:
                 continue
-            if found := self.token_hit(token, cwd, bare_words):
+            if found := self.token_hit(token, cwd, bare_files_only):
                 return _refused(found)
         return None
 
@@ -700,7 +743,9 @@ class Guard:
         if not rest or rest[0] not in _GIT_FILE_READERS:
             return None
         for token in positionals(rest[1:], _GIT_TEXT_FLAGS):
-            if found := self.revision_path_hit(token) or self.token_hit(token, cwd):
+            if found := self.revision_path_hit(token, cwd) or self.token_hit(
+                token, cwd
+            ):
                 return _refused(found)
         return None
 
@@ -720,23 +765,35 @@ def _shell_script(args: list[str]) -> str | None:
     return None
 
 
-def search_patterns(name: str, args: list[str]) -> list[str]:
-    """The search patterns a grep-like command is given: its first word, or its ``-e`` values.
+def search_pattern_indices(name: str, args: list[str]) -> list[int]:
+    """Where a grep-like command's search patterns sit: its first word, or its ``-e`` values.
 
     Args:
         name: The command's name.
         args: Its arguments.
 
     Returns:
-        The pattern texts, which are never paths.
+        The indices in ``args`` of pattern texts, which are never paths.
     """
-    if name not in {"grep", "egrep", "fgrep", "rg", "ag"}:
+    if name not in _GREP_LIKE:
         return []
-    explicit = [args[i + 1] for i, a in enumerate(args[:-1]) if a in {"-e", "--regexp"}]
-    explicit += [a.split("=", 1)[1] for a in args if a.startswith("--regexp=")]
+    explicit = [i + 1 for i, a in enumerate(args[:-1]) if a in {"-e", "--regexp"}]
+    explicit += [i for i, a in enumerate(args) if a.startswith("--regexp=")]
     if explicit or any(a in {"-f", "--file"} for a in args):
         return explicit
-    return positionals(args, _VALUE_FLAGS[name])[:1]
+    skip = False
+    for index, arg in enumerate(args):
+        if skip:
+            skip = False
+            continue
+        if arg == "--":
+            return [index + 1] if index + 1 < len(args) else []
+        if arg in _VALUE_FLAGS[name]:
+            skip = True
+            continue
+        if not arg.startswith("-"):
+            return [index]
+    return []
 
 
 def decide(

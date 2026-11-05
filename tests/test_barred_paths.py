@@ -323,3 +323,54 @@ def test_three_nested_shells_ask(project: ProjectFactory) -> None:
     env = env_with(project, [":(top,exclude)secrets/"])
     command = "bash -c \"bash -c 'bash -c ls'\""
     assert decision(call("Bash", {"command": command}, env)) == "ask"
+
+
+def third_env(project: ProjectFactory) -> dict[str, str]:
+    env = env_with(
+        project, [":(top,exclude)secrets/", ":(top,exclude).env", "*_private*"]
+    )
+    root = Path(env["CLAUDE_PROJECT_DIR"])
+    (root / ".env").write_text("API_KEY=x", encoding="utf-8")
+    (root / "notes_private.txt").write_text("x", encoding="utf-8")
+    (root / "sub").mkdir()
+    (root / "sl").symlink_to(root / "secrets")
+    return env
+
+
+@pytest.mark.parametrize(
+    ("command", "cwd"),
+    [
+        ("grep API_KEY .env", ""),
+        ("cut -d= -f2 .env", ""),
+        ("grep foo notes_private.txt", ""),
+        ("openssl enc -in notes_private.txt", ""),
+        ("grep foo key.pem", "secrets"),
+        ("openssl rsa -in key.pem", "secrets"),
+        ("grep secrets/key.pem secrets/key.pem", ""),
+        ("git -C sub show HEAD:../secrets/key.pem", ""),
+        ("git show HEAD:./key.pem", "secrets"),
+        ("cat sl/key.pem", ""),
+    ],
+)
+def test_third_review_bypasses_are_denied(
+    project: ProjectFactory, command: str, cwd: str
+) -> None:
+    env = third_env(project)
+    where = str(Path(env["CLAUDE_PROJECT_DIR"]) / cwd) if cwd else ""
+    assert decision(call("Bash", {"command": command}, env, where)) == "deny", command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "tree -I 'secrets|node_modules|*_private*|.env'",
+        "grep -r --exclude-dir={secrets,.git} --exclude=.env --exclude='*_private*' foo .",
+        "find . -path '*/secrets' -prune -o -name .env -prune -o -name '*_private*' -prune -o -print",
+        "git ls-files ':!:secrets' ':!:.env' ':!*_private*'",
+        "gh issue create --title secrets/key.pem --body 'see .env'",
+        "kubectl get secrets",
+    ],
+)
+def test_third_review_false_denials_pass(project: ProjectFactory, command: str) -> None:
+    env = third_env(project)
+    assert call("Bash", {"command": command}, env) is None, command
